@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI agents when working with code in this repository.
 
 ## Project Overview
 
@@ -73,6 +73,16 @@ This is a **library** (not a standalone Phoenix app) that provides AI capabiliti
 ## Tailwind CSS Scanning
 
 This module implements `css_sources/0` returning `[:phoenix_kit_ai]` so PhoenixKit's installer adds the correct `@source` directive to the parent's `app.css`. Without this, Tailwind purges CSS classes unique to this module's templates.
+
+## Pull Requests
+
+### Commit Message Rules
+
+Start with action verbs: `Add`, `Update`, `Fix`, `Remove`, `Merge`. **NEVER mention Claude or AI assistance** in commit messages.
+
+### PR Reviews
+
+PR review files go in `dev_docs/pull_requests/{year}/{pr_number}-{slug}/` directory. Use `{AGENT}_REVIEW.md` naming (e.g., `CLAUDE_REVIEW.md`, `GPT_REVIEW.md`). See `dev_docs/pull_requests/README.md`.
 
 ## External Dependencies
 
