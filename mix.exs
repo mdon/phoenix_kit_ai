@@ -2,7 +2,7 @@ defmodule PhoenixKitAI.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/mdon/phoenix_kit_ai"
+  @source_url "https://github.com/BeamLabEU/phoenix_kit_ai"
 
   def project do
     [
@@ -71,7 +71,7 @@ defmodule PhoenixKitAI.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE)
+      files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 
