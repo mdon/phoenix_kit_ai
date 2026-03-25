@@ -33,16 +33,10 @@ Run `mix deps.get` and start the server. The module appears in:
 {:phoenix_kit_ai, path: "../phoenix_kit_ai"}
 ```
 
-### Git dependency
-
-```elixir
-{:phoenix_kit_ai, git: "https://github.com/BeamLabEU/phoenix_kit_ai.git"}
-```
-
 ### Hex package
 
 ```elixir
-{:phoenix_kit_ai, "~> 0.1.0"}
+{:phoenix_kit_ai, "~> 0.1"}
 ```
 
 ## Usage
@@ -99,8 +93,6 @@ lib/
     openrouter_client.ex               # API key validation & model discovery
     ai_model.ex                        # Normalized model struct
     routes.ex                          # Admin sub-routes (new/edit forms)
-    migrations/
-      v1.ex                            # Migration module (called by parent app)
     web/
       endpoints.ex/.heex               # Endpoints list + usage page
       endpoint_form.ex/.heex           # Create/edit endpoint
@@ -121,7 +113,7 @@ All tables use UUIDv7 primary keys and timestamptz columns.
 - **`phoenix_kit_ai_prompts`** — Prompt templates (14 columns)
 - **`phoenix_kit_ai_requests`** — Request logs (18 columns, FK to endpoints/prompts/users)
 
-Database tables and migrations are managed by the parent PhoenixKit project. This repo provides `PhoenixKitAI.Migrations.V1` as a library module that the parent app's migrations call — there are no migrations to run in this repo directly.
+Database tables and migrations are managed by the parent PhoenixKit project — there are no migrations in this repo.
 
 ## Admin pages
 
@@ -147,7 +139,7 @@ Currently supports **OpenRouter** (100+ models from Anthropic, OpenAI, Google, M
 | `enabled?/0` | DB-backed boolean with rescue fallback |
 | `enable_system/0` | Persists via Settings API |
 | `disable_system/0` | Persists via Settings API |
-| `version/0` | `"0.1.1"` |
+| `version/0` | `"0.1.2"` |
 | `permission_metadata/0` | key: `"ai"`, icon: `hero-sparkles` |
 | `admin_tabs/0` | 5 tabs (parent + 4 subtabs) |
 | `css_sources/0` | `[:phoenix_kit_ai]` |

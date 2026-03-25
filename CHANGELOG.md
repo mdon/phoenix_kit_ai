@@ -1,3 +1,11 @@
+## 0.1.2 - 2026-03-25
+
+### Removed
+- Remove leftover `PhoenixKitAI.Migrations.V1` module — all migrations are handled by the parent PhoenixKit package
+
+### Fixed
+- Clean up migration references in README
+
 ## 0.1.1 - 2026-03-25
 
 ### Fixed
