@@ -11,6 +11,6 @@
 - Add admin LiveViews: Endpoints, EndpointForm, Prompts, PromptForm, Playground
 - Add route module with `admin_routes/0` and `admin_locale_routes/0`
 - Add `css_sources/0` for Tailwind CSS scanning support
-- Add consolidated migration (v1) with `IF NOT EXISTS` for all 3 tables
+- Add migration module (v1) with `IF NOT EXISTS` for all 3 tables (run by parent app)
 - Add behaviour compliance test suite
 - Add prompt unit tests (variable extraction, substitution, validation)

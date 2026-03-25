@@ -36,7 +36,7 @@ Run `mix deps.get` and start the server. The module appears in:
 ### Git dependency
 
 ```elixir
-{:phoenix_kit_ai, git: "https://github.com/mdon/phoenix_kit_ai.git"}
+{:phoenix_kit_ai, git: "https://github.com/BeamLabEU/phoenix_kit_ai.git"}
 ```
 
 ### Hex package
@@ -100,7 +100,7 @@ lib/
     ai_model.ex                        # Normalized model struct
     routes.ex                          # Admin sub-routes (new/edit forms)
     migrations/
-      v1.ex                            # Consolidated migration (IF NOT EXISTS)
+      v1.ex                            # Migration module (called by parent app)
     web/
       endpoints.ex/.heex               # Endpoints list + usage page
       endpoint_form.ex/.heex           # Create/edit endpoint
@@ -121,7 +121,7 @@ All tables use UUIDv7 primary keys and timestamptz columns.
 - **`phoenix_kit_ai_prompts`** — Prompt templates (14 columns)
 - **`phoenix_kit_ai_requests`** — Request logs (18 columns, FK to endpoints/prompts/users)
 
-The consolidated migration (`PhoenixKitAI.Migrations.V1`) uses `IF NOT EXISTS` throughout, so it's safe to run even if tables already exist from PhoenixKit core migrations.
+Database tables and migrations are managed by the parent PhoenixKit project. This repo provides `PhoenixKitAI.Migrations.V1` as a library module that the parent app's migrations call — there are no migrations to run in this repo directly.
 
 ## Admin pages
 
@@ -175,3 +175,5 @@ mix test
 createdb phoenix_kit_ai_test
 mix test
 ```
+
+> **Note:** This repo has no database migrations. All tables and migrations are managed by the parent PhoenixKit project. The test helper creates necessary DB functions directly when a test database is available.

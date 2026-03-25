@@ -74,6 +74,34 @@ This is a **library** (not a standalone Phoenix app) that provides AI capabiliti
 
 This module implements `css_sources/0` returning `[:phoenix_kit_ai]` so PhoenixKit's installer adds the correct `@source` directive to the parent's `app.css`. Without this, Tailwind purges CSS classes unique to this module's templates.
 
+## Versioning & Releases
+
+### Tagging & GitHub releases
+
+Tags use **bare version numbers** (no `v` prefix):
+
+```bash
+git tag 0.1.0
+git push origin 0.1.0
+```
+
+GitHub releases are created with `gh release create` using the tag as the release name. The title format is `<version> - <date>`, and the body comes from the corresponding `CHANGELOG.md` section:
+
+```bash
+gh release create 0.1.0 \
+  --title "0.1.0 - 2026-03-24" \
+  --notes "$(changelog body for this version)"
+```
+
+### Full release checklist
+
+1. Update version in `mix.exs`, `lib/phoenix_kit_ai.ex` (`version/0`), and the version test
+2. Add changelog entry in `CHANGELOG.md`
+3. Commit: `"Bump version to x.y.z"`
+4. Push to main
+5. Create and push git tag: `git tag x.y.z && git push origin x.y.z`
+6. Create GitHub release: `gh release create x.y.z --title "x.y.z - YYYY-MM-DD" --notes "..."`
+
 ## Pull Requests
 
 ### Commit Message Rules
