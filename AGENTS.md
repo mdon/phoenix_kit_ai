@@ -97,20 +97,23 @@ gh release create 0.1.0 \
 
 1. Update version in `mix.exs`, `lib/phoenix_kit_ai.ex` (`version/0`), and the version test
 2. Add changelog entry in `CHANGELOG.md`
-3. Commit: `"Bump version to x.y.z"`
-4. Push to main
-5. Create and push git tag: `git tag x.y.z && git push origin x.y.z`
-6. Create GitHub release: `gh release create x.y.z --title "x.y.z - YYYY-MM-DD" --notes "..."`
+3. Run `mix precommit` — ensure zero warnings/errors before proceeding
+4. Commit all changes: `"Bump version to x.y.z"`
+5. Push to main and **verify the push succeeded** before tagging
+6. Create and push git tag: `git tag x.y.z && git push origin x.y.z`
+7. Create GitHub release: `gh release create x.y.z --title "x.y.z - YYYY-MM-DD" --notes "..."`
+
+**IMPORTANT:** Never tag or create a release before all changes are committed and pushed. Tags are immutable pointers — tagging before pushing means the release points to the wrong commit.
 
 ## Pull Requests
 
 ### Commit Message Rules
 
-Start with action verbs: `Add`, `Update`, `Fix`, `Remove`, `Merge`. **NEVER mention Claude or AI assistance** in commit messages.
+Start with action verbs: `Add`, `Update`, `Fix`, `Remove`, `Merge`.
 
 ### PR Reviews
 
-PR review files go in `dev_docs/pull_requests/{year}/{pr_number}-{slug}/` directory. Use `{AGENT}_REVIEW.md` naming (e.g., `CLAUDE_REVIEW.md`, `GPT_REVIEW.md`). See `dev_docs/pull_requests/README.md`.
+PR review files go in `dev_docs/pull_requests/{year}/{pr_number}-{slug}/` directory. Use `{AGENT}_REVIEW.md` naming (e.g., `CLAUDE_REVIEW.md`, `GEMINI_REVIEW.md`). See `dev_docs/pull_requests/README.md`.
 
 ## External Dependencies
 
