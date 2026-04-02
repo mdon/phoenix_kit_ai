@@ -16,7 +16,7 @@ AI module for PhoenixKit — provides endpoint management, prompt templates, com
 Add to your parent app's `mix.exs`:
 
 ```elixir
-{:phoenix_kit_ai, path: "../phoenix_kit_ai"}
+{:phoenix_kit_ai, "~> 0.1"}
 ```
 
 Run `mix deps.get` and start the server. The module appears in:
