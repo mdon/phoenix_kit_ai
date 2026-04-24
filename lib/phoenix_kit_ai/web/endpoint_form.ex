@@ -527,12 +527,13 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       end
 
     case result do
-      {:ok, _endpoint} ->
+      {:ok, endpoint} ->
         action = if socket.assigns.endpoint, do: "updated", else: "created"
+        message = save_success_message(endpoint, action)
 
         {:noreply,
          socket
-         |> put_flash(:info, "Endpoint #{action} successfully")
+         |> put_flash(:info, message)
          |> push_navigate(to: Routes.ai_path())}
 
       {:error, changeset} ->
@@ -549,6 +550,41 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
       {:noreply, put_flash(socket, :error, gettext("Something went wrong. Please try again."))}
   end
+
+  # Builds the post-save flash message, appending a soft warning when the
+  # endpoint's `provider` points at an integration that is not currently
+  # connected AND there is no legacy `api_key` fallback. Save still
+  # succeeds — the user is free to connect the integration afterwards.
+  defp save_success_message(endpoint, action) do
+    base = gettext("Endpoint %{action} successfully", action: action)
+
+    case integration_warning(endpoint) do
+      nil -> base
+      warning -> base <> ". " <> warning
+    end
+  end
+
+  defp integration_warning(%{provider: provider, api_key: api_key}) do
+    cond do
+      provider in [nil, ""] ->
+        nil
+
+      PhoenixKit.Integrations.connected?(provider) ->
+        nil
+
+      is_binary(api_key) and api_key != "" ->
+        # Legacy endpoint with a stored key — fallback path still works.
+        nil
+
+      true ->
+        gettext(
+          "The %{provider} integration is not connected — requests will fail until you connect it in Settings → Integrations.",
+          provider: "\"#{provider}\""
+        )
+    end
+  end
+
+  defp integration_warning(_), do: nil
 
   # PubSub: reload connections when integrations change
   @impl true

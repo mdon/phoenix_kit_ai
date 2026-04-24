@@ -375,10 +375,26 @@ defmodule PhoenixKitAI.OpenRouterClient do
   defp resolve_api_key(provider, endpoint) do
     # provider is the endpoint's provider field, e.g. "openrouter" or "openrouter:my-key"
     case PhoenixKit.Integrations.get_credentials(provider) do
-      {:ok, %{"api_key" => key}} when is_binary(key) and key != "" -> key
-      _ -> endpoint.api_key
+      {:ok, %{"api_key" => key}} when is_binary(key) and key != "" ->
+        key
+
+      _ ->
+        warn_legacy_api_key(endpoint)
+        endpoint.api_key
     end
   end
+
+  defp warn_legacy_api_key(%{uuid: uuid, name: name, api_key: key})
+       when is_binary(key) and key != "" do
+    Logger.warning(
+      "[PhoenixKitAI] endpoint #{inspect(name)} (#{uuid}) is using the " <>
+        "deprecated endpoint.api_key field. Migrate it to a " <>
+        "PhoenixKit.Integrations connection; the api_key column will be " <>
+        "removed in a future major version."
+    )
+  end
+
+  defp warn_legacy_api_key(_), do: :ok
 
   @doc """
   Returns the base URL for OpenRouter API.

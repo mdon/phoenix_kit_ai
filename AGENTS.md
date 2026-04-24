@@ -59,6 +59,28 @@ This is a **library** (not a standalone Phoenix app) that provides AI capabiliti
 - `phoenix_kit_ai_prompts` — Prompt templates (UUIDv7 PK)
 - `phoenix_kit_ai_requests` — Request logs for usage tracking (UUIDv7 PK)
 
+### Migrating from legacy `endpoint.api_key`
+
+Endpoints created before the Integrations migration (PR #3) stored the
+OpenRouter API key directly in the `api_key` column. New endpoints leave
+that column blank and point `provider` at a `PhoenixKit.Integrations`
+connection key instead (e.g. `"openrouter"` or `"openrouter:my-key"`).
+
+When `OpenRouterClient.resolve_api_key/2` has to fall back to the legacy
+column, it logs a `Logger.warning` identifying the endpoint by name +
+UUID so the noise is actionable. To clear it for a given endpoint:
+
+1. Open Settings → Integrations and add an OpenRouter connection (if one
+   doesn't already exist). The default connection key is `openrouter`.
+2. Edit the endpoint in the AI admin UI and select that connection from
+   the `integration_picker`. The `provider` field will be set to the
+   connection's lookup key.
+3. Save. The legacy warning stops firing on the next request.
+
+The `api_key` column is retained so pre-migration deployments keep
+working without forced downtime, and is flagged **Deprecated** in
+`PhoenixKitAI.Endpoint` — planned for removal in a future major version.
+
 ## Critical Conventions
 
 - **Module key** must be consistent across all callbacks: `"ai"`

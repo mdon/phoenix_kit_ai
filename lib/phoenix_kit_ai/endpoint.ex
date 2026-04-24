@@ -13,8 +13,12 @@ defmodule PhoenixKitAI.Endpoint do
   - `description`: Optional description of the endpoint's purpose
 
   ### Provider Configuration
-  - `provider`: Provider type (currently "openrouter")
-  - `api_key`: Provider API key
+  - `provider`: Integration connection key (e.g. `"openrouter"` or
+    `"openrouter:my-key"`). Resolved via `PhoenixKit.Integrations`.
+  - `api_key`: **Deprecated.** Legacy field retained only so pre-Integrations
+    endpoints keep working. New endpoints should leave this blank and set
+    up an OpenRouter connection under Settings → Integrations instead.
+    Will be removed in a future major version.
   - `base_url`: Optional custom base URL for the provider
   - `provider_settings`: Provider-specific settings (JSON)
     - For OpenRouter: `http_referer`, `x_title` headers
