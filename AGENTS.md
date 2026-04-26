@@ -6,6 +6,18 @@ This file provides guidance to AI agents when working with code in this reposito
 
 PhoenixKit AI module — provides AI endpoint management, prompt templates, completions (via OpenRouter), and usage tracking. Implements the `PhoenixKit.Module` behaviour for auto-discovery by a parent Phoenix application.
 
+## What This Module Does NOT Have (by design)
+
+The omissions below are deliberate so consumers and future contributors don't expect them.
+
+- **No DB migrations of its own** — every table this module owns (`phoenix_kit_ai_endpoints`, `phoenix_kit_ai_prompts`, `phoenix_kit_ai_requests`) is created by versioned migrations in core `phoenix_kit` (V40+ for `uuid_generate_v7()`, V57+ for the AI tables). Adding a column is a core migration first, then schema + changeset edits here.
+- **No per-completion activity logging** — `PhoenixKit.Activity.log/1` is invoked only on endpoint/prompt CRUD + enable/disable toggles. Per-request usage already lives in `phoenix_kit_ai_requests` with token/cost/latency columns; mirroring it into `phoenix_kit_activities` would double-write the same audit trail.
+- **No automated migration script for legacy `endpoint.api_key`** — pre-Integrations endpoints keep working via the `OpenRouterClient.resolve_api_key/2` fallback path with a `Logger.warning` flagging each call. Users migrate at their own pace through the UI; see "Migrating from legacy `endpoint.api_key`" below.
+- **No public HTTP / API surface** — AI is admin-only. No JSON endpoints, no webhook receivers, no socket forwards. Consumers wire AI completions into their own host code via the `PhoenixKitAI` context module.
+- **No background jobs (Oban)** — completions run synchronously from the calling LiveView (`Playground.handle_info(:do_send, …)`) so the user sees the response inline. Long-running batch generation belongs in the consumer app, not here.
+- **No streaming responses** — `Completion` returns the full `{:ok, response}` shape; OpenRouter's SSE streaming endpoint isn't surfaced. The Playground UI is request/response, not chat-stream.
+- **No Errors-module truncation helper** — error messages from the OpenRouter API come back as short JSON strings, so `Errors.message/1` doesn't include a `truncate_for_log/2` style cap. The few Logger calls that take API response bodies (`completion.ex`, `openrouter_client.ex`) format them inline; if a future provider returns multi-KB error blobs, add a truncation helper then.
+
 ## Common Commands
 
 ### Setup & Dependencies

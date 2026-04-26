@@ -100,6 +100,149 @@ Post-merge review of CLAUDE_REVIEW.md findings against the current code on
 - `mix test` — 82 tests, 0 failures (was 1 failure before the
   `get_config/0` fix)
 
+## Fixed (Batch 2 — re-validation 2026-04-26)
+
+Pipeline re-run against the AI module — the first sweep target — to
+catch drift since 2026-04-24 as the playbook has evolved. Phase 1 PR
+triage (#1 / #2 / #3 / #4) re-verified clean; the items below are the
+gaps the current C-step checklist surfaced and the fixes applied.
+
+- ~~**phx-disable-with missing on destructive `phx-click` buttons**~~
+  (C5) — `endpoints.html.heex:223` (`delete_endpoint`),
+  `prompts.html.heex:179` (`delete_prompt`), and the playground send
+  button (`playground.html.heex:217`) all destructive/async. Each now
+  carries `phx-disable-with={gettext("Deleting…")}` /
+  `gettext("Sending…")` so a slow round-trip can't be double-clicked.
+  Pinned by regex assertions in `endpoints_test.exs`,
+  `prompts_test.exs`, and `playground_test.exs`.
+- ~~**Catch-all `handle_info/2` clauses missing or silent**~~ (C10) —
+  `endpoint_form.ex` and `playground.ex` had no catch-all (any
+  unmatched PubSub broadcast surfaced as a `FunctionClauseError`);
+  `endpoints.ex:467` and `prompts.ex:205` had silent
+  `def handle_info(_msg, socket), do: {:noreply, socket}` clauses.
+  All four now log at `Logger.debug` per the workspace sync precedent
+  (AGENTS.md:677-679). Pinned by a "ignores unrelated PubSub messages
+  without crashing" smoke test per LV that does
+  `send(view.pid, …); render(view)`.
+- ~~**`pgcrypto` extension not enabled in test_helper**~~ (C7) —
+  `test/test_helper.exs:69` only enabled `uuid-ossp`, but
+  `uuid_generate_v7()` calls `gen_random_bytes/1` from `pgcrypto`.
+  Worked on the existing test DB by accident; would break on a
+  fresh `createdb`. Now creates both extensions side by side, matching
+  the canonical pattern in `phoenix_kit_hello_world` /
+  `phoenix_kit_locations`.
+- ~~**`errors_test.exs` had the `is_binary/1` smell**~~ (C8) — the
+  test asserted only `is_binary(result)` over a list of atoms. Per
+  AGENTS.md:293-295 every branch of `message/1` returns a binary, so
+  the assertion proved nothing — a regression in any single
+  `gettext(...)` call would slip through. Rewrote to pin the EXACT
+  translated string per atom, and added the missing
+  `:api_key_forbidden` and `:model_not_found` rows. Plus-15 tests.
+- ~~**Translations sweep gaps**~~ (C12 agent #2) — re-running the
+  translations Explore agent surfaced 9 user-facing strings still
+  hard-coded in heex templates: "Sort by:" (×2), "Never used" (×2),
+  delete-button `data-confirm` text (×2), "Clear" filter button,
+  "No requests match the current filters", "No Endpoints Yet" /
+  "Create your first AI endpoint…" / "Create Endpoint",
+  "No Prompts Yet" / "Create reusable prompt templates…" /
+  "Create First Prompt", "Sending…" inline button text, "Send"
+  inline button text. All wrapped in `gettext(...)`. Plus
+  `endpoints.html.heex:416` was using `String.capitalize(status)`
+  on a translatable status string — replaced with
+  `PhoenixKitAI.Request.status_label/1`, which got literal-call
+  `gettext("Success") / gettext("Error") / gettext("Timeout") /
+  gettext("Unknown")` clauses (the only shape `mix gettext.extract`
+  picks up — see AGENTS.md:350-360).
+- ~~**`@type t` missing on `Request` schema**~~ (C12 agent #3) —
+  `request.ex` had `@type t` declared on `Endpoint` and `Prompt` but
+  not `Request`. Added `@type t :: %__MODULE__{}` to match.
+- ~~**AGENTS.md missing canonical "What This Module Does NOT Have"
+  section**~~ (C1) — pulled the section from `phoenix_kit_hello_world`'s
+  template and filled in the AI-specific deliberate non-features
+  (no own DB migrations, no per-completion activity logging, no
+  legacy `api_key` data migration script, no public HTTP API, no
+  Oban background jobs, no streaming responses, no Errors-module
+  truncation helper).
+
+## Skipped (with rationale)
+
+- **SSRF on `endpoint.base_url`** (C12 agent #1, HIGH) — verified real:
+  `endpoint.ex:117` declares `field(:base_url, :string)`,
+  `endpoint.ex:170` casts it from form params, and
+  `completion.ex:322-327`'s `build_url/2` flows it straight into
+  `Req.post/2` at `completion.ex:281` with no allowlist. An admin
+  user could create an endpoint with `base_url:
+  "http://169.254.169.254/latest/meta-data/"` (cloud metadata) or
+  any RFC1918 / loopback / `.local` host and have the server make
+  the request, with the response surfacing in the playground UI.
+  Mitigating factor: AI is admin-only, no public route. Not fixed
+  here per the [feedback_quality_sweep_scope.md](~/.claude/projects/-Users-maxdon-Desktop-Elixir/memory/feedback_quality_sweep_scope.md)
+  rule — SSRF allowlist validation is a missing-feature, not a
+  refactor of an existing path. Surfaced for Max to schedule as a
+  dedicated hardening PR. Suggested fix: a `validate_base_url/1`
+  changeset validator that parses the URL, rejects RFC1918 ranges
+  (10/8, 172.16/12, 192.168/16), link-local (169.254/16),
+  loopback (127/8, ::1), `.local` mDNS, and non-`https` schemes for
+  external providers.
+- **`@spec` backfill on 33+ public functions** (C12 agent #3) — the
+  bulk of `lib/phoenix_kit_ai.ex` (~28 fns), `completion.ex` (5),
+  `openrouter_client.ex` (~15), and `routes.ex` (2) lack `@spec`
+  declarations. Adding them en masse is a separate documentation
+  pass, not a behaviour-affecting refactor. Surfaced for a follow-up.
+  The high-traffic functions on the request schema (`status_label`,
+  `status_color`, etc.) were not specced either; ditto deferral.
+- **Bulk component-refactor (raw `<input>`/`<textarea>` →
+  `<.input>`/`<.textarea>`)** (C6) — `endpoint_form.html.heex`,
+  `prompt_form.html.heex`, and parts of `endpoints.html.heex` use
+  raw HTML inputs instead of `PhoenixKitWeb.Components.Core.{Input,
+  Textarea}`. Per AGENTS.md:466-477 the playbook recommends the swap,
+  but the AI forms have a lot of bespoke wrapping (provider picker
+  + dynamic param grid + reasoning-effort grid) that would need
+  per-field rework. Out of scope for this re-validation pass;
+  surfaced as a dedicated component-pass PR opportunity.
+- **LV error-path tests** (C12 agent #2) — current LV smoke tests
+  cover happy paths plus the few "not found" / "no endpoint
+  selected" branches. Empty-input / >255-char / Unicode /
+  SQL-metacharacter coverage is thinner than the playbook's
+  ideal but the underlying changeset validations are pinned by
+  `endpoint_test.exs` / `prompt_changeset_test.exs`. Not a
+  pinning-test gap for behaviour the sweep introduced; deferred.
+
+## Files touched (Batch 2)
+
+| File | Change |
+|------|--------|
+| `lib/phoenix_kit_ai/web/endpoints.html.heex` | C5 phx-disable-with on delete; C12 gettext on Sort by / Never used / data-confirm / No Endpoints Yet / Create Endpoint / Clear / No requests match; status_label swap |
+| `lib/phoenix_kit_ai/web/prompts.html.heex` | C5 phx-disable-with on delete; C12 gettext on Sort by / Never used / data-confirm / No Prompts Yet / Create First Prompt |
+| `lib/phoenix_kit_ai/web/playground.html.heex` | C5 phx-disable-with on send; C12 gettext on Sending… / Send |
+| `lib/phoenix_kit_ai/web/endpoint_form.ex` | C10 catch-all handle_info with Logger.debug; require Logger hoisted to module top |
+| `lib/phoenix_kit_ai/web/endpoints.ex` | C10 catch-all upgraded silent → Logger.debug; require Logger added |
+| `lib/phoenix_kit_ai/web/playground.ex` | C10 catch-all handle_info added; require Logger added |
+| `lib/phoenix_kit_ai/web/prompts.ex` | C10 catch-all upgraded silent → Logger.debug; require Logger added |
+| `lib/phoenix_kit_ai/request.ex` | C12 `use Gettext`, `@type t`, `status_label/1` literal-gettext clauses |
+| `test/test_helper.exs` | C7 enable `pgcrypto` extension alongside `uuid-ossp` |
+| `test/phoenix_kit_ai/errors_test.exs` | C8 per-atom EXACT-string pin + `:api_key_forbidden` + `:model_not_found` (+15 tests) |
+| `test/phoenix_kit_ai/web/endpoints_test.exs` | C11 phx-disable-with regex pin + handle_info catch-all smoke |
+| `test/phoenix_kit_ai/web/prompts_test.exs` | C11 same |
+| `test/phoenix_kit_ai/web/endpoint_form_test.exs` | C11 handle_info catch-all smoke |
+| `test/phoenix_kit_ai/web/playground_test.exs` | C11 phx-disable-with on send + handle_info catch-all smoke |
+| `AGENTS.md` | C1 "What This Module Does NOT Have" section |
+
+## Verification (Batch 2)
+
+- `mix precommit` ✓ (compile + format + credo --strict + dialyzer 0 errors)
+- `mix test` — 201 tests, 0 failures (was 179 before this batch; +22 from per-atom Errors rewrite + delta-pinning)
+- `for i in 1..10; do mix test --seed $i; done` — 10/10 stable, all 201 passes
+- Pre-existing log spam (`Failed to query setting ai_enabled:
+  %DBConnection.OwnershipError`) is unchanged — emitted by core
+  PhoenixKit's `Settings.get_boolean_setting/2` from a non-sandbox-
+  allowed process; AI module's `enabled?/0` correctly catches the
+  exception and returns `false`. Suppressing the log lives in core,
+  out of scope for this module.
+
 ## Open
 
-None from the original review.
+None from this re-validation. Two items deliberately surfaced for
+Max's scheduling: SSRF on `endpoint.base_url` (HIGH; needs a
+dedicated hardening PR) and the bulk `@spec` backfill (LOW; doc
+pass).
