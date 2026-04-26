@@ -168,11 +168,13 @@ defmodule PhoenixKitAI.Request do
   @doc """
   Returns the list of valid status types.
   """
+  @spec valid_statuses() :: [String.t()]
   def valid_statuses, do: @valid_statuses
 
   @doc """
   Returns the list of valid request types.
   """
+  @spec valid_request_types() :: [String.t()]
   def valid_request_types, do: @valid_request_types
 
   @doc """
@@ -182,6 +184,7 @@ defmodule PhoenixKitAI.Request do
   strings up — a `gettext(status)` call over a variable wouldn't make
   it into the .pot.
   """
+  @spec status_label(String.t()) :: String.t()
   def status_label("success"), do: gettext("Success")
   def status_label("error"), do: gettext("Error")
   def status_label("timeout"), do: gettext("Timeout")
@@ -190,6 +193,7 @@ defmodule PhoenixKitAI.Request do
   @doc """
   Returns a CSS class for the status badge.
   """
+  @spec status_color(String.t()) :: String.t()
   def status_color("success"), do: "badge-success"
   def status_color("error"), do: "badge-error"
   def status_color("timeout"), do: "badge-warning"
@@ -198,6 +202,7 @@ defmodule PhoenixKitAI.Request do
   @doc """
   Formats the latency for display.
   """
+  @spec format_latency(integer() | nil) :: String.t()
   def format_latency(nil), do: "-"
   def format_latency(ms) when ms < 1000, do: "#{ms}ms"
   def format_latency(ms), do: "#{Float.round(ms / 1000, 1)}s"
@@ -205,6 +210,7 @@ defmodule PhoenixKitAI.Request do
   @doc """
   Formats the token count for display.
   """
+  @spec format_tokens(integer() | nil) :: String.t()
   def format_tokens(nil), do: "-"
   def format_tokens(0), do: "0"
   def format_tokens(tokens) when tokens < 1000, do: "#{tokens}"
@@ -221,6 +227,7 @@ defmodule PhoenixKitAI.Request do
   - >= $0.0001: 4 decimal places ($0.0012)
   - > $0: 6 decimal places ($0.000030)
   """
+  @spec format_cost(integer() | nil) :: String.t()
   def format_cost(nil), do: "-"
   def format_cost(0), do: "$0.00"
 

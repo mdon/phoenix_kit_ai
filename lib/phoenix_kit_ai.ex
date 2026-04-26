@@ -88,16 +88,19 @@ defmodule PhoenixKitAI do
   Returns the PubSub topic for AI endpoints.
   Subscribe to this topic to receive real-time updates.
   """
+  @spec endpoints_topic() :: String.t()
   def endpoints_topic, do: @endpoints_topic
 
   @doc """
   Returns the PubSub topic for AI prompts.
   """
+  @spec prompts_topic() :: String.t()
   def prompts_topic, do: @prompts_topic
 
   @doc """
   Returns the PubSub topic for AI requests/usage.
   """
+  @spec requests_topic() :: String.t()
   def requests_topic, do: @requests_topic
 
   @doc """
@@ -276,6 +279,7 @@ defmodule PhoenixKitAI do
   Checks if the AI module is enabled.
   """
   @impl PhoenixKit.Module
+  @spec enabled?() :: boolean()
   def enabled? do
     Settings.get_boolean_setting("ai_enabled", false)
   rescue
@@ -292,6 +296,7 @@ defmodule PhoenixKitAI do
   Enables the AI module.
   """
   @impl PhoenixKit.Module
+  @spec enable_system() :: {:ok, term()} | {:error, term()}
   def enable_system do
     Settings.update_boolean_setting_with_module("ai_enabled", true, module_key())
   end
@@ -300,6 +305,7 @@ defmodule PhoenixKitAI do
   Disables the AI module.
   """
   @impl PhoenixKit.Module
+  @spec disable_system() :: {:ok, term()} | {:error, term()}
   def disable_system do
     Settings.update_boolean_setting_with_module("ai_enabled", false, module_key())
   end
@@ -313,6 +319,12 @@ defmodule PhoenixKitAI do
   `enabled?/0`.
   """
   @impl PhoenixKit.Module
+  @spec get_config() :: %{
+          enabled: boolean(),
+          endpoints_count: non_neg_integer(),
+          total_requests: non_neg_integer(),
+          total_tokens: non_neg_integer()
+        }
   def get_config do
     %{
       enabled: enabled?(),
@@ -335,12 +347,15 @@ defmodule PhoenixKitAI do
   # ===========================================
 
   @impl PhoenixKit.Module
+  @spec module_key() :: String.t()
   def module_key, do: "ai"
 
   @impl PhoenixKit.Module
+  @spec module_name() :: String.t()
   def module_name, do: "AI"
 
   @impl PhoenixKit.Module
+  @spec permission_metadata() :: map()
   def permission_metadata do
     %{
       key: module_key(),
@@ -351,6 +366,7 @@ defmodule PhoenixKitAI do
   end
 
   @impl PhoenixKit.Module
+  @spec admin_tabs() :: [PhoenixKit.Dashboard.Tab.t()]
   def admin_tabs do
     [
       %Tab{
@@ -412,15 +428,19 @@ defmodule PhoenixKitAI do
 
   @impl PhoenixKit.Module
   @dialyzer {:nowarn_function, css_sources: 0}
+  @spec css_sources() :: [atom()]
   def css_sources, do: [:phoenix_kit_ai]
 
   @impl PhoenixKit.Module
+  @spec required_integrations() :: [String.t()]
   def required_integrations, do: ["openrouter"]
 
   @impl PhoenixKit.Module
+  @spec version() :: String.t()
   def version, do: "0.1.5"
 
   @impl PhoenixKit.Module
+  @spec route_module() :: module()
   def route_module, do: PhoenixKitAI.Routes
 
   # ===========================================
@@ -440,6 +460,7 @@ defmodule PhoenixKitAI do
       PhoenixKitAI.list_endpoints()
       PhoenixKitAI.list_endpoints(provider: "openrouter", enabled: true)
   """
+  @spec list_endpoints(keyword()) :: {[Endpoint.t()], non_neg_integer()}
   def list_endpoints(opts \\ []) do
     sort_by = Keyword.get(opts, :sort_by, :sort_order)
     sort_dir = Keyword.get(opts, :sort_dir, :asc)
@@ -696,6 +717,7 @@ defmodule PhoenixKitAI do
   @doc """
   Returns an endpoint changeset for use in forms.
   """
+  @spec change_endpoint(Endpoint.t(), map()) :: Ecto.Changeset.t()
   def change_endpoint(%Endpoint{} = endpoint, attrs \\ %{}) do
     Endpoint.changeset(endpoint, attrs)
   end
@@ -703,6 +725,8 @@ defmodule PhoenixKitAI do
   @doc """
   Marks an endpoint as validated by updating its last_validated_at timestamp.
   """
+  @spec mark_endpoint_validated(Endpoint.t()) ::
+          {:ok, Endpoint.t()} | {:error, Ecto.Changeset.t()}
   def mark_endpoint_validated(%Endpoint{} = endpoint) do
     endpoint
     |> Endpoint.validation_changeset()
@@ -712,6 +736,7 @@ defmodule PhoenixKitAI do
   @doc """
   Counts the total number of endpoints.
   """
+  @spec count_endpoints() :: non_neg_integer()
   def count_endpoints do
     repo().aggregate(Endpoint, :count)
   end
@@ -719,6 +744,7 @@ defmodule PhoenixKitAI do
   @doc """
   Counts the number of enabled endpoints.
   """
+  @spec count_enabled_endpoints() :: non_neg_integer()
   def count_enabled_endpoints do
     query = from(e in Endpoint, where: e.enabled == true)
     repo().aggregate(query, :count)
@@ -742,6 +768,7 @@ defmodule PhoenixKitAI do
       PhoenixKitAI.list_prompts(sort_by: :name, sort_dir: :asc)
       PhoenixKitAI.list_prompts(enabled: true)
   """
+  @spec list_prompts(keyword()) :: [Prompt.t()] | {[Prompt.t()], non_neg_integer()}
   def list_prompts(opts \\ []) do
     sort_by = Keyword.get(opts, :sort_by, :sort_order)
     sort_dir = Keyword.get(opts, :sort_dir, :asc)
@@ -785,6 +812,7 @@ defmodule PhoenixKitAI do
 
       PhoenixKitAI.list_enabled_prompts()
   """
+  @spec list_enabled_prompts() :: [Prompt.t()] | {[Prompt.t()], non_neg_integer()}
   def list_enabled_prompts do
     list_prompts(enabled: true)
   end
@@ -794,6 +822,7 @@ defmodule PhoenixKitAI do
 
   Raises `Ecto.NoResultsError` if the prompt does not exist.
   """
+  @spec get_prompt!(String.t()) :: Prompt.t()
   def get_prompt!(id) do
     case get_prompt(id) do
       nil -> raise Ecto.NoResultsError, queryable: Prompt
@@ -808,6 +837,7 @@ defmodule PhoenixKitAI do
 
   Returns `nil` if the prompt does not exist.
   """
+  @spec get_prompt(term()) :: Prompt.t() | nil
   def get_prompt(id) when is_binary(id) do
     if textual_uuid?(id) do
       repo().get_by(Prompt, uuid: id)
@@ -823,6 +853,7 @@ defmodule PhoenixKitAI do
 
   Returns `nil` if the prompt does not exist.
   """
+  @spec get_prompt_by_slug(String.t()) :: Prompt.t() | nil
   def get_prompt_by_slug(slug) when is_binary(slug) do
     repo().get_by(Prompt, slug: slug)
   end
@@ -881,6 +912,7 @@ defmodule PhoenixKitAI do
   @doc """
   Returns a prompt changeset for use in forms.
   """
+  @spec change_prompt(Prompt.t(), map()) :: Ecto.Changeset.t()
   def change_prompt(%Prompt{} = prompt, attrs \\ %{}) do
     Prompt.changeset(prompt, attrs)
   end
@@ -888,6 +920,7 @@ defmodule PhoenixKitAI do
   @doc """
   Increments the usage count for a prompt and updates last_used_at.
   """
+  @spec record_prompt_usage(Prompt.t()) :: {:ok, Prompt.t()} | {:error, Ecto.Changeset.t()}
   def record_prompt_usage(%Prompt{} = prompt) do
     prompt
     |> Prompt.usage_changeset()
@@ -897,6 +930,7 @@ defmodule PhoenixKitAI do
   @doc """
   Counts the total number of prompts.
   """
+  @spec count_prompts() :: non_neg_integer()
   def count_prompts do
     repo().aggregate(Prompt, :count)
   end
@@ -904,6 +938,7 @@ defmodule PhoenixKitAI do
   @doc """
   Counts the number of enabled prompts.
   """
+  @spec count_enabled_prompts() :: non_neg_integer()
   def count_enabled_prompts do
     query = from(p in Prompt, where: p.enabled == true)
     repo().aggregate(query, :count)
@@ -1051,6 +1086,7 @@ defmodule PhoenixKitAI do
   @doc """
   Duplicates a prompt with a new name.
   """
+  @spec duplicate_prompt(String.t(), String.t()) :: {:ok, Prompt.t()} | {:error, term()}
   def duplicate_prompt(prompt_uuid, new_name) when is_binary(new_name) do
     with {:ok, prompt} <- resolve_prompt(prompt_uuid) do
       create_prompt(%{
@@ -1067,6 +1103,7 @@ defmodule PhoenixKitAI do
   @doc """
   Enables a prompt.
   """
+  @spec enable_prompt(String.t()) :: {:ok, Prompt.t()} | {:error, term()}
   def enable_prompt(prompt_uuid) do
     with {:ok, prompt} <- resolve_prompt(prompt_uuid) do
       update_prompt(prompt, %{enabled: true})
@@ -1076,6 +1113,7 @@ defmodule PhoenixKitAI do
   @doc """
   Disables a prompt.
   """
+  @spec disable_prompt(String.t()) :: {:ok, Prompt.t()} | {:error, term()}
   def disable_prompt(prompt_uuid) do
     with {:ok, prompt} <- resolve_prompt(prompt_uuid) do
       update_prompt(prompt, %{enabled: false})
@@ -1341,6 +1379,7 @@ defmodule PhoenixKitAI do
   @doc """
   Counts the total number of requests.
   """
+  @spec count_requests() :: non_neg_integer()
   def count_requests do
     repo().aggregate(Request, :count)
   end
@@ -1348,6 +1387,7 @@ defmodule PhoenixKitAI do
   @doc """
   Sums the total tokens used across all requests.
   """
+  @spec sum_tokens() :: non_neg_integer()
   def sum_tokens do
     repo().aggregate(Request, :sum, :total_tokens) || 0
   end
