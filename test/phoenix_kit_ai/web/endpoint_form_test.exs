@@ -101,4 +101,76 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
       assert is_binary(render(view))
     end
   end
+
+  describe "edge-case input handling" do
+    # These pin C12 agent #2's "tests cover error paths, not just happy
+    # paths" requirement. Each case is a class of input that has
+    # historically tripped Phoenix forms or Ecto changesets.
+
+    test "Unicode name round-trips through changeset + DB", _ do
+      attrs = %{
+        name: "日本語エンドポイント — Café 🚀 #{System.unique_integer([:positive])}",
+        provider: "openrouter",
+        model: "a/b"
+      }
+
+      assert {:ok, endpoint} = PhoenixKitAI.create_endpoint(attrs)
+      assert endpoint.name =~ "日本語"
+      assert endpoint.name =~ "🚀"
+
+      reloaded = PhoenixKitAI.get_endpoint!(endpoint.uuid)
+      assert reloaded.name == endpoint.name
+    end
+
+    test "SQL metacharacters in name don't break create_endpoint or get_endpoint", _ do
+      malicious =
+        "'; DROP TABLE phoenix_kit_ai_endpoints; -- #{System.unique_integer([:positive])}"
+
+      assert {:ok, endpoint} =
+               PhoenixKitAI.create_endpoint(%{
+                 name: malicious,
+                 provider: "openrouter",
+                 model: "a/b"
+               })
+
+      # Round-trip — the literal string lives in the DB; Ecto's
+      # parameterised query path makes injection a non-issue.
+      assert endpoint.name == malicious
+      assert PhoenixKitAI.get_endpoint!(endpoint.uuid).name == malicious
+    end
+
+    test "name longer than 100 chars is rejected by the changeset validator" do
+      too_long = String.duplicate("X", 101)
+
+      changeset =
+        PhoenixKitAI.Endpoint.changeset(%PhoenixKitAI.Endpoint{}, %{
+          name: too_long,
+          provider: "openrouter",
+          model: "a/b"
+        })
+
+      refute changeset.valid?
+
+      assert changeset.errors[:name] |> elem(0) =~ "should be at most"
+    end
+
+    test "empty name on the validate event renders an inline error", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
+
+      # `phx-change="validate"` fires on every keystroke. The form body
+      # has a hidden `endpoint[model]` input that must match what the
+      # LV rendered, so we trigger validate via render_change with the
+      # field we actually want to vary, leaving the model alone.
+      html =
+        view
+        |> render_change("validate", %{
+          "endpoint" => %{"name" => "", "provider" => "openrouter", "model" => ""}
+        })
+
+      # Inline error renders because the LV's validate event sets
+      # `:action = :validate` (endpoint_form.ex:236, 300, 324, 343),
+      # gating `<.input>`'s error display.
+      assert html =~ "can&#39;t be blank" or html =~ "blank"
+    end
+  end
 end
