@@ -189,6 +189,141 @@ defmodule PhoenixKitAI.EndpointTest do
     end
   end
 
+  describe "changeset/2 — SSRF guard on base_url" do
+    # Pin the validator added 2026-04-26. Without it, an admin could
+    # create an endpoint pointing at AWS cloud-metadata
+    # (169.254.169.254), corporate intranet ranges, or the local
+    # loopback and have the server fetch on their behalf via
+    # `Completion.build_url/2` → `Req.post/2`.
+
+    test "the openrouter default (https://openrouter.ai/api/v1) passes" do
+      changeset =
+        Endpoint.changeset(%Endpoint{}, %{name: "Default", provider: "openrouter", model: "a/b"})
+
+      assert changeset.valid?
+      refute errors_on(changeset)[:base_url]
+    end
+
+    test "non-http(s) schemes are rejected" do
+      for url <- ["file:///etc/passwd", "gopher://x/", "ftp://x/", "javascript:alert(1)"] do
+        changeset = ssrf_changeset(url)
+        refute changeset.valid?, "expected #{url} to fail"
+        assert errors_on(changeset)[:base_url] |> Enum.any?(&(&1 =~ "http or https"))
+      end
+    end
+
+    test "missing host is rejected" do
+      changeset = ssrf_changeset("https://")
+      refute changeset.valid?
+      assert errors_on(changeset)[:base_url] |> Enum.any?(&(&1 =~ "hostname"))
+    end
+
+    test "AWS cloud-metadata (169.254.169.254) is rejected" do
+      changeset = ssrf_changeset("http://169.254.169.254/latest/meta-data/")
+      refute changeset.valid?
+      assert errors_on(changeset)[:base_url] |> Enum.any?(&(&1 =~ "private/loopback/link-local"))
+    end
+
+    test "loopback (127.0.0.1) is rejected" do
+      changeset = ssrf_changeset("http://127.0.0.1:11434/api")
+      refute changeset.valid?
+      assert errors_on(changeset)[:base_url] |> Enum.any?(&(&1 =~ "private/loopback/link-local"))
+    end
+
+    test "RFC1918 ranges (10/8, 172.16/12, 192.168/16) are rejected" do
+      for url <- [
+            "http://10.1.2.3/",
+            "http://172.16.0.1/",
+            "http://172.31.255.254/",
+            "http://192.168.1.1/"
+          ] do
+        changeset = ssrf_changeset(url)
+        refute changeset.valid?, "expected #{url} to fail"
+
+        assert errors_on(changeset)[:base_url]
+               |> Enum.any?(&(&1 =~ "private/loopback/link-local"))
+      end
+    end
+
+    test "RFC1918 boundaries: 172.15 and 172.32 are NOT considered private" do
+      for url <- ["https://172.15.0.1/", "https://172.32.0.1/"] do
+        changeset = ssrf_changeset(url)
+        # Public IPs in those ranges pass.
+        assert changeset.valid?, "expected #{url} to pass — boundary outside RFC1918"
+      end
+    end
+
+    test "0.0.0.0 (unspecified) is rejected" do
+      changeset = ssrf_changeset("http://0.0.0.0/")
+      refute changeset.valid?
+    end
+
+    test "IPv6 loopback ::1 is rejected" do
+      changeset = ssrf_changeset("http://[::1]/")
+      refute changeset.valid?
+    end
+
+    test "IPv6 link-local fe80:: is rejected" do
+      changeset = ssrf_changeset("http://[fe80::1]/")
+      refute changeset.valid?
+    end
+
+    test "localhost hostname is rejected" do
+      changeset = ssrf_changeset("http://localhost:11434/api")
+      refute changeset.valid?
+      assert errors_on(changeset)[:base_url] |> Enum.any?(&(&1 =~ "localhost"))
+    end
+
+    test ".local mDNS hostnames are rejected" do
+      changeset = ssrf_changeset("http://printer.local/api")
+      refute changeset.valid?
+      assert errors_on(changeset)[:base_url] |> Enum.any?(&(&1 =~ ".local"))
+    end
+
+    test "config :allow_internal_endpoint_urls bypasses the internal-IP checks" do
+      Application.put_env(:phoenix_kit_ai, :allow_internal_endpoint_urls, true)
+
+      try do
+        for url <- [
+              "http://localhost:11434/api",
+              "http://127.0.0.1/",
+              "http://192.168.1.1/",
+              "http://printer.local/"
+            ] do
+          changeset = ssrf_changeset(url)
+          assert changeset.valid?, "expected #{url} to pass with override on"
+        end
+
+        # The scheme guard still fires even with the override on.
+        changeset = ssrf_changeset("file:///etc/passwd")
+        refute changeset.valid?
+      after
+        Application.delete_env(:phoenix_kit_ai, :allow_internal_endpoint_urls)
+      end
+    end
+
+    test "public hostnames pass" do
+      for url <- [
+            "https://api.openai.com/v1",
+            "https://openrouter.ai/api/v1",
+            "https://api.anthropic.com",
+            "http://example.com:8080/api"
+          ] do
+        changeset = ssrf_changeset(url)
+        assert changeset.valid?, "expected #{url} to pass"
+      end
+    end
+  end
+
+  defp ssrf_changeset(url) do
+    Endpoint.changeset(%Endpoint{}, %{
+      name: "SSRF Probe #{System.unique_integer([:positive])}",
+      provider: "openrouter",
+      model: "a/b",
+      base_url: url
+    })
+  end
+
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
       Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
