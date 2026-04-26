@@ -340,6 +340,202 @@ plus one new C12 finding the deeper pass surfaced.
   from SSRF + edge-case suites)
 - `for i in 1..10; do mix test --seed $i; done` — 10/10 stable
 
+## Fixed (Batch 4 — coverage push 2026-04-26)
+
+A `mix test --cover` audit revealed the AI module had been shipped
+without the line-coverage push that landed for `phoenix_kit_locations`
+in the same week. Pre-existing coverage was **36.96%** — every prior
+batch added structural tests but none specifically chased uncovered
+lines. This batch follows the workspace AGENTS.md "Coverage push
+pattern" verbatim (no Mox, no excoveralls, no other deps — only
+`mix test --cover` and `Req.Test`-driven HTTP stubs).
+
+**Per-module coverage (before → after)**:
+
+| Module | Before | After |
+|--------|-------:|------:|
+| `PhoenixKitAI` (top-level) | 29.33% | **95.11%** |
+| `PhoenixKitAI.Completion` | 28.00% | **97.40%** |
+| `PhoenixKitAI.OpenRouterClient` | 16.84% | **94.27%** |
+| `PhoenixKitAI.Endpoint` | 66.28% | **93.02%** |
+| `PhoenixKitAI.Prompt` | 67.61% | **95.77%** |
+| `PhoenixKitAI.Request` | 37.50% | **95.00%** |
+| `PhoenixKitAI.Web.Endpoints` | 26.09% | **87.92%** |
+| `PhoenixKitAI.Web.EndpointForm` | 36.48% | **81.97%** |
+| `PhoenixKitAI.Web.Prompts` | 53.42% | **86.30%** |
+| `PhoenixKitAI.Web.PromptForm` | 70.00% | **90.00%** |
+| `PhoenixKitAI.Web.Playground` | 13.95% | **93.02%** |
+| **Total** | **36.96%** | **90.93%** |
+
+Already at 100% before this batch: `Errors`, `Routes`, `AIModel`,
+the three `Jason.Encoder` impls, plus all `Test.*` infra modules.
+
+**Production-code change** — both HTTP entry points
+(`OpenRouterClient.http_get/2` and `Completion.http_post/3`) now
+read optional `Req` options from `Application.get_env(:phoenix_kit_ai,
+:req_options, [])` and append them to their base option list.
+Production behaviour is unchanged when the config is absent (default
+`[]`); tests opt in via
+`Application.put_env(:phoenix_kit_ai, :req_options, plug: {Req.Test, Stub})`
+to route HTTP through stubs without external traffic. Net diff:
+6 lines added, 0 removed across both files.
+
+**New test files** (all in `test/phoenix_kit_ai/`):
+
+- `coverage_test.exs` (96 tests) — pure-DB / pure-helper paths on the
+  top-level: PubSub topics + subscribers (broadcast assertions), all
+  endpoint sort variants (`:usage` / `:tokens` / `:cost` / `:last_used`
+  with seeded request data — `inserted_at` explicitly stamped via
+  `Repo.update_all` to avoid second-precision flakes), every request
+  filter (`endpoint_uuid` / `user_uuid` / `status` / `model` / `source`
+  JSONB / `since`), every request sort field, stats fns
+  (`get_usage_stats`, `get_dashboard_stats`, `get_tokens_by_model`,
+  `get_requests_by_day`, `get_request_filter_options`, `get_endpoint_usage_stats`),
+  prompt operations (`validate_prompt`, `duplicate_prompt`,
+  `enable/disable_prompt`, `render_prompt`, `preview_prompt`,
+  `validate_prompt_variables`, `search_prompts`,
+  `get_prompts_with_variable`, `validate_prompt_content`,
+  `get_prompt_usage_stats`, `reset_prompt_usage`, `reorder_prompts`,
+  `record_prompt_usage`, `increment_prompt_usage`), `resolve_prompt`
+  three-way dispatch (struct / UUID / slug + invalid + not-found),
+  `mark_endpoint_validated`, `change_endpoint`/`change_prompt`,
+  count fns, get!/!-bang raise paths.
+
+- `schema_coverage_test.exs` (58 tests) — `Endpoint` helpers and
+  changeset SSRF / penalty / reasoning branches (every IPv4 + IPv6
+  range guard, `.local`, `localhost`, non-http(s) scheme, no-host,
+  the `allow_internal_endpoint_urls` bypass), `Prompt` formatters
+  (`render_system_prompt`, `render_content`, `validate_variables`,
+  `content_preview`, `generate_slug`, `has_variables?`,
+  `variable_count`, `format_variables_for_display`, `valid_content?`,
+  `invalid_variables`, `merge_with_defaults`), `Request` formatters
+  (`status_label` × 4 atoms, `status_color` × 4, `format_latency` /
+  `format_tokens` / `format_cost` precision tiers, `short_model_name`
+  branches, `calculate_total_tokens` auto-fill).
+
+- `openrouter_client_coverage_test.exs` (41 tests) — `Req.Test` plug
+  stubs covering 200 + 401 + 403 + 5xx + non-JSON + non-list + transport
+  errors on `validate_api_key/1`, `fetch_models/2`, `fetch_models_grouped/2`,
+  `fetch_models_by_type/3`, `fetch_model/3`. Plus the
+  `humanize_provider/1` lookup table (every named slug → its branded
+  label, dash-split fallback, nil), `model_option/1` shape variants,
+  `get_model_max_tokens/1` fallback chain, `model_supports_parameter?/2`
+  struct + map dispatch, `build_headers/2` with `include_usage` flag,
+  `build_headers_from_account`, `fetch_embedding_models_grouped`
+  bare-id grouping, `extract_provider`/`extract_model_name` edge cases.
+
+- `completion_coverage_test.exs` (33 tests) — `Req.Test`-stubbed
+  `chat_completion/3` covering 200 / 401 / 402 / 429 / non-JSON /
+  transport :timeout / transport :nxdomain. Same matrix for
+  `embeddings/3`. End-to-end `PhoenixKitAI.complete/3`, `ask/3`,
+  `embed/3`, `ask_with_prompt/4`, `complete_with_system_prompt/5` —
+  asserts Request-row logging on success, `:endpoint_disabled`,
+  `:endpoint_not_found`, prompt-usage increments only on success
+  (and NOT on error), `build_chat_body` with all optional knobs
+  (temperature, top_p/k, penalties, stop, seed, stream, reasoning_*),
+  string-keyed message normalisation, `build_url` with trailing
+  slash, `extract_usage` parse_cost(non-number) → nil.
+
+- `web/endpoints_coverage_test.exs` (22 tests) — Endpoints LV sort
+  / pagination URL params, redirect from `/admin/ai` to `/admin/ai/endpoints`,
+  garbage-page fallback, full usage tab (sort + filter via
+  `usage_filter` event, `clear_usage_filters`, `load_more_requests`,
+  `show_request_details` / `close_request_details`, every
+  `date_filter_to_datetime` clause, garbage-date fallback), every
+  PubSub broadcast (`:endpoint_created/_updated/_deleted`,
+  `:request_created` on/off the usage tab).
+
+- `web/prompts_coverage_test.exs` (10 tests) — Prompts LV sort
+  variants (`:asc` / `:desc` defaults per field, flip on same field,
+  bogus field fallback to `:sort_order`), pagination, every PubSub
+  broadcast.
+
+- `web/playground_coverage_test.exs` (12 tests) — every `change`
+  event branch (endpoint select, prompt select + switch, edited
+  content with variable diff preservation, freeform message + system),
+  `send` without endpoint (flash error), `send` with stubbed completion
+  (success populates `response_text`, `:do_send` `handle_info`
+  exercised), prompt-based send increments `usage_count`, error path
+  via `Errors.message/1`, `clear` event, `:empty_input` early return.
+
+- `web/endpoint_form_coverage_test.exs` (24 tests) — `select_provider`
+  (with + without provider), `select_model` (every clause incl.
+  fallback no-op + empty + non-empty), `clear_model`,
+  `set_manual_model` (with + without model), `toggle_reasoning`
+  (flips both directions), `select_openrouter_connection` (unknown
+  UUID), `validate` (with + without model), `save` success +
+  validation-error paths via `render_hook` (bypasses DOM lookup so
+  conditional fields don't break the test), every `handle_info`
+  clause (3-tuple PubSub events, 2-tuple events, `:integration_validated`,
+  `:fetch_models_from_integration`, `{:fetch_models, api_key}` with
+  per-test `Req.Test.allow/3` for the spawned task), public helpers
+  (`get_supported_params` for nil / AIModel / map; `model_max_tokens`
+  for nil / AIModel / map; `format_number` for nil / int / float /
+  binary; `parameter_definitions` shape).
+
+- `web/prompt_form_coverage_test.exs` (4 tests) — `validate` event
+  variable extraction (with + without variables), `save` update path
+  (existing prompt → push_navigate), `save` error path (inline error
+  rendering).
+
+**Test-fixture trap** captured for the playbook: a `setup` block
+that creates multiple `Request` rows in the same wall-clock second
+hits `timestamps(type: :utc_datetime)`'s 1-second precision and
+flakes 50% on `:last_used DESC` ordering. The fix in
+`coverage_test.exs:164-178` is to stamp explicit times via
+`Repo.update_all/2` with a `now -secs_ago` formula. Already added
+to the workspace AGENTS.md "Known flaky-test traps" section as part
+of this batch.
+
+## Files touched (Batch 4)
+
+| File | Change |
+|------|--------|
+| `lib/phoenix_kit_ai/openrouter_client.ex` | `http_get/2` reads optional `Req` opts from app config (production default unchanged) |
+| `lib/phoenix_kit_ai/completion.ex` | `http_post/3` reads optional `Req` opts from app config (production default unchanged) |
+| `test/phoenix_kit_ai/coverage_test.exs` | New — 96 tests for top-level public API |
+| `test/phoenix_kit_ai/schema_coverage_test.exs` | New — 58 tests for the three Ecto schemas |
+| `test/phoenix_kit_ai/openrouter_client_coverage_test.exs` | New — 41 tests via Req.Test stubs |
+| `test/phoenix_kit_ai/completion_coverage_test.exs` | New — 33 tests via Req.Test stubs |
+| `test/phoenix_kit_ai/web/endpoints_coverage_test.exs` | New — 22 tests for the Endpoints LV |
+| `test/phoenix_kit_ai/web/prompts_coverage_test.exs` | New — 10 tests for the Prompts LV |
+| `test/phoenix_kit_ai/web/playground_coverage_test.exs` | New — 12 tests for the Playground LV |
+| `test/phoenix_kit_ai/web/endpoint_form_coverage_test.exs` | New — 24 tests for the EndpointForm LV |
+| `test/phoenix_kit_ai/web/prompt_form_coverage_test.exs` | New — 4 tests for the PromptForm LV |
+
+## Verification (Batch 4)
+
+- `mix precommit` ✓ (compile + format + credo --strict + dialyzer
+  0 errors)
+- `mix test` — **522 tests, 0 failures** (was 223 after Batch 3;
+  +299 net)
+- `for i in 1..10; do mix test; done` — **10/10 stable**
+- `mix test --cover` — **90.93% line coverage** (was 36.96%
+  pre-batch)
+
+## What's still uncovered (and why)
+
+Per the AGENTS.md "Coverage push pattern" residual list — these
+defensive branches stay uncovered intentionally:
+
+- `enabled?/0` `rescue _ -> false` and `catch :exit, _ -> false` —
+  core's `Settings.get_boolean_setting/2` already swallows DB
+  errors before they reach the rescue point. Only fires if core
+  re-raises.
+- `safe_count/1` rescue + catch — same pattern as `enabled?/0`.
+- `OpenRouterClient.http_get/2` `{:error, %{} | _}` clause for
+  Req's "anything else" return — Req only emits `Req.Response` or
+  `Req.TransportError`, so the catch-all is defence-in-depth that
+  can't be reached without monkey-patching Req.
+- `Completion.http_post/3` same.
+- `EndpointForm.handle_info/2` for the `{:fetch_models, _}` error
+  path — covered by stub but the success branch dominates the
+  coverage report; the error branch is small enough that pinning
+  it more aggressively would require a duplicate test infra.
+- `humanize_provider/1` — every explicit slug is now hit, but
+  Erlang's coverage tool counts the `def` lines, not the body, so
+  the per-line percentage caps at the dispatch arm count.
+
 ## Open
 
-None. Every item Batch 2 deferred is closed in Batch 3.
+None.
