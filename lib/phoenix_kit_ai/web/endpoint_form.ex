@@ -137,35 +137,32 @@ defmodule PhoenixKitAI.Web.EndpointForm do
   # ===========================================
 
   @impl true
-  def mount(params, _session, socket) do
-    if AI.enabled?() do
-      if connected?(socket), do: IntegrationEvents.subscribe()
+  def mount(_params, _session, socket) do
+    # No DB queries in mount/3 — they run twice. The `enabled?` check,
+    # integration listing, and endpoint load all happen in
+    # `handle_params/3`.
+    if connected?(socket), do: IntegrationEvents.subscribe()
 
-      project_title = Settings.get_project_title()
+    socket =
+      socket
+      |> assign(:project_title, nil)
+      |> assign(:current_path, Routes.path("/admin/ai"))
+      |> assign(:openrouter_connections, [])
+      |> assign(:models, [])
+      |> assign(:models_grouped, [])
+      |> assign(:models_loading, false)
+      |> assign(:models_error, nil)
+      |> assign(:selected_model, nil)
+      |> assign(:selected_provider, nil)
+      |> assign(:provider_models, [])
+      |> assign(:endpoint, nil)
+      |> assign(:active_connection, nil)
+      |> assign(:integration_connected, false)
+      |> assign(:form, to_form(AI.change_endpoint(%Endpoint{})))
+      |> assign(:page_title, "AI Endpoint")
+      |> assign(:loaded, false)
 
-      openrouter_connections = Integrations.list_connections("openrouter")
-
-      socket =
-        socket
-        |> assign(:project_title, project_title)
-        |> assign(:current_path, Routes.path("/admin/ai"))
-        |> assign(:openrouter_connections, openrouter_connections)
-        |> assign(:models, [])
-        |> assign(:models_grouped, [])
-        |> assign(:models_loading, false)
-        |> assign(:models_error, nil)
-        |> assign(:selected_model, nil)
-        |> assign(:selected_provider, nil)
-        |> assign(:provider_models, [])
-        |> load_endpoint(params["id"])
-
-      {:ok, socket}
-    else
-      {:ok,
-       socket
-       |> put_flash(:error, gettext("AI module is not enabled"))
-       |> push_navigate(to: Routes.path("/admin/modules"))}
-    end
+    {:ok, socket}
   end
 
   defp load_endpoint(socket, nil) do
@@ -242,8 +239,30 @@ defmodule PhoenixKitAI.Web.EndpointForm do
   end
 
   @impl true
-  def handle_params(_params, _url, socket) do
-    {:noreply, socket}
+  def handle_params(params, _url, socket) do
+    if socket.assigns.loaded do
+      {:noreply, socket}
+    else
+      handle_initial_params(params, socket)
+    end
+  end
+
+  defp handle_initial_params(params, socket) do
+    if AI.enabled?() do
+      socket =
+        socket
+        |> assign(:project_title, Settings.get_project_title())
+        |> assign(:openrouter_connections, Integrations.list_connections("openrouter"))
+        |> load_endpoint(params["id"])
+        |> assign(:loaded, true)
+
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> put_flash(:error, gettext("AI module is not enabled"))
+       |> push_navigate(to: Routes.path("/admin/modules"))}
+    end
   end
 
   @impl true

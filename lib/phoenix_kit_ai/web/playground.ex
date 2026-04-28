@@ -27,44 +27,61 @@ defmodule PhoenixKitAI.Web.Playground do
 
   @impl true
   def mount(_params, _session, socket) do
-    if AI.enabled?() do
-      project_title = Settings.get_project_title()
+    # No DB queries here — `mount/3` runs twice. The `enabled?` check
+    # and the endpoints/prompts load both happen in `handle_params/3`
+    # so neither pays the 2× cost.
+    socket =
+      socket
+      |> assign(:project_title, nil)
+      |> assign(:current_path, Routes.path("/admin/ai/playground"))
+      |> assign(:page_title, "AI Playground")
+      |> assign(:endpoints, [])
+      |> assign(:prompts, [])
+      |> assign(:enabled_check_done, false)
+      |> assign(:selected_endpoint_uuid, nil)
+      |> assign(:selected_prompt_uuid, nil)
+      |> assign(:selected_prompt, nil)
+      |> assign(:variable_values, %{})
+      |> assign(:edited_content, nil)
+      |> assign(:edited_variables, [])
+      |> assign(:freeform_system, "")
+      |> assign(:freeform_message, "")
+      |> assign(:response_text, nil)
+      |> assign(:response_usage, nil)
+      |> assign(:response_error, nil)
+      |> assign(:sending, false)
 
+    {:ok, socket}
+  end
+
+  @impl true
+  def handle_params(_params, _url, socket) do
+    if socket.assigns.enabled_check_done do
+      {:noreply, socket}
+    else
+      handle_initial_params(socket)
+    end
+  end
+
+  defp handle_initial_params(socket) do
+    if AI.enabled?() do
       {endpoints, _total} = AI.list_endpoints(enabled: true, page: 1, page_size: 100)
       prompts = AI.list_prompts(enabled: true)
 
       socket =
         socket
-        |> assign(:project_title, project_title)
-        |> assign(:current_path, Routes.path("/admin/ai/playground"))
-        |> assign(:page_title, "AI Playground")
+        |> assign(:project_title, Settings.get_project_title())
         |> assign(:endpoints, endpoints)
         |> assign(:prompts, prompts)
-        |> assign(:selected_endpoint_uuid, nil)
-        |> assign(:selected_prompt_uuid, nil)
-        |> assign(:selected_prompt, nil)
-        |> assign(:variable_values, %{})
-        |> assign(:edited_content, nil)
-        |> assign(:edited_variables, [])
-        |> assign(:freeform_system, "")
-        |> assign(:freeform_message, "")
-        |> assign(:response_text, nil)
-        |> assign(:response_usage, nil)
-        |> assign(:response_error, nil)
-        |> assign(:sending, false)
+        |> assign(:enabled_check_done, true)
 
-      {:ok, socket}
+      {:noreply, socket}
     else
-      {:ok,
+      {:noreply,
        socket
        |> put_flash(:error, gettext("AI module is not enabled"))
        |> push_navigate(to: Routes.path("/admin/modules"))}
     end
-  end
-
-  @impl true
-  def handle_params(_params, _url, socket) do
-    {:noreply, socket}
   end
 
   # ===========================================

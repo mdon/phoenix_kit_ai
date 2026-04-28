@@ -19,24 +19,20 @@ defmodule PhoenixKitAI.Web.PromptForm do
   # ===========================================
 
   @impl true
-  def mount(params, _session, socket) do
-    if AI.enabled?() do
-      project_title = Settings.get_project_title()
+  def mount(_params, _session, socket) do
+    # No DB queries in mount/3 — they run twice. The `enabled?` check
+    # and the prompt load both happen in `handle_params/3`.
+    socket =
+      socket
+      |> assign(:project_title, nil)
+      |> assign(:current_path, Routes.path("/admin/ai"))
+      |> assign(:extracted_variables, [])
+      |> assign(:prompt, nil)
+      |> assign(:form, to_form(AI.change_prompt(%Prompt{})))
+      |> assign(:page_title, "AI Prompt")
+      |> assign(:loaded, false)
 
-      socket =
-        socket
-        |> assign(:project_title, project_title)
-        |> assign(:current_path, Routes.path("/admin/ai"))
-        |> assign(:extracted_variables, [])
-        |> load_prompt(params["id"])
-
-      {:ok, socket}
-    else
-      {:ok,
-       socket
-       |> put_flash(:error, gettext("AI module is not enabled"))
-       |> push_navigate(to: Routes.path("/admin/modules"))}
-    end
+    {:ok, socket}
   end
 
   defp load_prompt(socket, nil) do
@@ -67,8 +63,29 @@ defmodule PhoenixKitAI.Web.PromptForm do
   end
 
   @impl true
-  def handle_params(_params, _url, socket) do
-    {:noreply, socket}
+  def handle_params(params, _url, socket) do
+    if socket.assigns.loaded do
+      {:noreply, socket}
+    else
+      handle_initial_params(params, socket)
+    end
+  end
+
+  defp handle_initial_params(params, socket) do
+    if AI.enabled?() do
+      socket =
+        socket
+        |> assign(:project_title, Settings.get_project_title())
+        |> load_prompt(params["id"])
+        |> assign(:loaded, true)
+
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> put_flash(:error, gettext("AI module is not enabled"))
+       |> push_navigate(to: Routes.path("/admin/modules"))}
+    end
   end
 
   # ===========================================

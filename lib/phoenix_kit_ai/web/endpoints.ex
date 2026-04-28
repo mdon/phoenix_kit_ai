@@ -52,10 +52,8 @@ defmodule PhoenixKitAI.Web.Endpoints do
       AI.subscribe_requests()
     end
 
-    # Check if we have any endpoints for initial tab selection
-    {_endpoints, total} = AI.list_endpoints()
-    has_endpoints = total > 0
-
+    # No DB queries here — `mount/3` runs twice (HTTP + WebSocket).
+    # `has_endpoints` and the data load happen in `handle_params/3`.
     socket =
       socket
       |> assign(:current_path, current_path)
@@ -63,14 +61,14 @@ defmodule PhoenixKitAI.Web.Endpoints do
       |> assign(:project_title, project_title)
       |> assign(:endpoints, [])
       |> assign(:endpoint_stats, %{})
-      |> assign(:has_endpoints, has_endpoints)
+      |> assign(:has_endpoints, false)
       |> assign(:sort_by, :id)
       |> assign(:sort_dir, :asc)
       |> assign(:sort_options, @sort_options)
       |> assign(:page, 1)
       |> assign(:page_size, @page_size)
       |> assign(:total_endpoints, 0)
-      |> assign(:active_tab, if(has_endpoints, do: "endpoints", else: "setup"))
+      |> assign(:active_tab, "endpoints")
       |> assign(:usage_loaded, false)
       |> assign(:usage_stats, nil)
       |> assign(:usage_requests, [])
