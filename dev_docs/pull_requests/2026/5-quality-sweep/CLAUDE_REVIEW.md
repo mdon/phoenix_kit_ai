@@ -13,6 +13,36 @@
 > `mix dialyzer` clean. See **Addressed Findings** at the end of this doc for
 > the rolled-up summary.
 
+## Notes for Max (reviewer)
+
+Three things to flag before you dive into the diffs:
+
+1. **Integration tests weren't run.** The 317 `:integration`-tagged tests
+   need PostgreSQL and the sandbox where the follow-up was authored doesn't
+   have it. Only the 213 unit tests are confirmed passing. The commit that
+   most needs the integration tests to clear is `6c6ccec` — the LiveView
+   `mount/3` → `handle_params/3` migration. The disconnected → connected
+   render flow is the specific path to watch (every admin LV under
+   `/admin/ai/*` plus the playground). If anything paints empty for a
+   beat then fills in, that's expected — the disconnected render now
+   returns the empty form skeleton and the WebSocket fetch fills the data.
+
+2. **`capture_request_content` default is `true`.** The new privacy gate
+   in finding #4 ships in opt-in shape — i.e. existing deployments keep
+   persisting message + response content to JSONB metadata exactly as
+   before, and operators with retention/PII concerns flip it off via
+   `config :phoenix_kit_ai, capture_request_content: false`. This was a
+   conservative call to preserve shipped behaviour; if you'd rather have
+   the safer default (off, with operators opting *in* to debug logging),
+   it's a one-line change in `phoenix_kit_ai.ex:capture_request_content?/0`.
+
+3. **`test_helper.exs` `try/rescue ErlangError` is sandbox-induced.** Your
+   local has `psql` on PATH so you'd never have hit the `:enoent` raise
+   the existing `_ -> :try_connect` clause was supposed to catch. The fix
+   is bundled with the docs commit (`d6ef7d5`) but is otherwise unrelated
+   to the review findings — feel free to split it back out into its own
+   commit or revert it if the previous shape was deliberate.
+
 ## Overall Assessment
 
 **Verdict: APPROVE — strong sweep with two regressions worth a follow-up.**
