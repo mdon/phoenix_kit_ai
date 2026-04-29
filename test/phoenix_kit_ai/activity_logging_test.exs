@@ -21,7 +21,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
           %{
             name: "Activity Test Created",
             provider: "openrouter",
-            model: "a/b"
+            model: "a/b",
+          api_key: "sk-test-key"
           },
           actor_uuid: actor,
           actor_role: "admin"
@@ -39,7 +40,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "To Update",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       actor = Ecto.UUID.generate()
@@ -56,6 +58,7 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Toggle Off",
           provider: "openrouter",
+          api_key: "sk-test-key",
           model: "a/b",
           enabled: true
         })
@@ -71,6 +74,7 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Toggle On",
           provider: "openrouter",
+          api_key: "sk-test-key",
           model: "a/b",
           enabled: false
         })
@@ -86,6 +90,7 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Same State",
           provider: "openrouter",
+          api_key: "sk-test-key",
           model: "a/b",
           enabled: true
         })
@@ -102,7 +107,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "To Delete",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       {:ok, _} = PhoenixKitAI.delete_endpoint(endpoint)
@@ -123,7 +129,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
           %{
             name: "Stays Same #{System.unique_integer([:positive])}",
             provider: "openrouter",
-            model: "a/b"
+            model: "a/b",
+          api_key: "sk-test-key"
           },
           actor_uuid: actor,
           actor_role: "admin"
@@ -306,7 +313,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "No Actor",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       row =
@@ -320,7 +328,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Default Role",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       assert_activity_logged("endpoint.created",

@@ -17,7 +17,13 @@ defmodule PhoenixKitAI.CoverageTest do
     base = %{
       name: "EP-#{System.unique_integer([:positive])}",
       provider: "openrouter",
-      model: "a/b"
+      model: "a/b",
+      # Production schema (core V34) requires api_key NOT NULL even
+      # though the changeset doesn't validate it as required. The
+      # entities-pattern migration cleanup surfaced this as a
+      # fixture-drift bug: the hand-rolled test migration made it
+      # nullable.
+      api_key: "sk-test-key"
     }
 
     {:ok, ep} = PhoenixKitAI.create_endpoint(Map.merge(base, attrs))

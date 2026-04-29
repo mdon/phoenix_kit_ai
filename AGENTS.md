@@ -245,7 +245,7 @@ Two levels of tests:
 1. **Unit tests** (`test/phoenix_kit_ai/{completion,errors,prompt,ai_model}_test.exs`) — Pure logic, no DB required, always run.
 2. **Integration tests** (`test/phoenix_kit_ai/{endpoint,request,openrouter_client}_test.exs`, LiveView tests) — Real PostgreSQL via Ecto sandbox; auto-excluded when the DB is unavailable.
 
-The test DB (`phoenix_kit_ai_test`) uses an embedded `PhoenixKitAI.Test.Repo` in `test/support/test_repo.ex`. Schema setup happens in `test/test_helper.exs` (it loads the schemas via raw DDL so no separate migration files are needed). Tests using `PhoenixKitAI.DataCase` are **automatically tagged `:integration`** and excluded when the DB is unavailable.
+The test DB (`phoenix_kit_ai_test`) uses an embedded `PhoenixKitAI.Test.Repo` in `test/support/test_repo.ex`. Schema setup happens in `test/test_helper.exs` by running core's versioned migrations directly (`Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, all: true, log: false)`) — same call the host app makes in production. No module-owned DDL anywhere. Tests using `PhoenixKitAI.DataCase` are **automatically tagged `:integration`** and excluded when the DB is unavailable.
 
 LiveView tests need a minimal test Endpoint + Router + Layouts + LiveCase — see `test/support/`. The router scopes at `/en/admin/ai/…` so admin paths receive the default locale. `lazy_html` is a `:test`-only dep for rendered-HTML assertions.
 

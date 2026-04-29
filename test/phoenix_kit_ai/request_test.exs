@@ -49,7 +49,8 @@ defmodule PhoenixKitAI.RequestTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Req test endpoint #{System.unique_integer([:positive])}",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       attrs = %{
@@ -83,7 +84,8 @@ defmodule PhoenixKitAI.RequestTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Persist endpoint #{System.unique_integer([:positive])}",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       {:ok, request} =

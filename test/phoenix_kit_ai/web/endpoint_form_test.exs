@@ -182,7 +182,8 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
       attrs = %{
         name: "日本語エンドポイント — Café 🚀 #{System.unique_integer([:positive])}",
         provider: "openrouter",
-        model: "a/b"
+        model: "a/b",
+        api_key: "sk-test-key"
       }
 
       assert {:ok, endpoint} = PhoenixKitAI.create_endpoint(attrs)
@@ -201,7 +202,8 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
                PhoenixKitAI.create_endpoint(%{
                  name: malicious,
                  provider: "openrouter",
-                 model: "a/b"
+                 model: "a/b",
+                 api_key: "sk-test-key"
                })
 
       # Round-trip — the literal string lives in the DB; Ecto's
