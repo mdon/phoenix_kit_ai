@@ -460,6 +460,7 @@ defmodule PhoenixKitAI.EndpointTest do
         )
 
       base_url_errors = errors_on(changeset)[:base_url] || []
+
       refute Enum.any?(base_url_errors, &(&1 =~ "scheme")),
              "expected empty base_url to skip the SSRF check"
     end

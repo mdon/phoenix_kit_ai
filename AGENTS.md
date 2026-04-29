@@ -227,6 +227,44 @@ When `OpenRouterClient.resolve_api_key/2` has to fall back to the legacy column,
 
 The `api_key` column is retained so pre-migration deployments keep working without forced downtime, and is flagged **Deprecated** in `PhoenixKitAI.Endpoint` — planned for removal in a future major version.
 
+### Auto-migrating at host-app boot
+
+`PhoenixKitAI.run_legacy_api_key_migration/0` is a one-shot auto-migrator that folds pre-Integrations endpoint api_keys into named `PhoenixKit.Integrations` connections. Mirrors the pattern of `PhoenixKit.Integrations.run_legacy_migrations/0` — call it once from your host app's `Application.start/2` to migrate without operator intervention:
+
+```elixir
+# In your host app's Application.start/2, after the Repo + supervisor children
+def start(_type, _args) do
+  children = [...]
+
+  result = Supervisor.start_link(children, opts)
+
+  # One-shot migrations — safe to call every boot. Idempotent via
+  # multiple guards; never crashes the boot if it fails.
+  PhoenixKit.Integrations.run_legacy_migrations()
+  PhoenixKitAI.run_legacy_api_key_migration()
+
+  result
+end
+```
+
+What the migration does:
+
+- Finds endpoints with `provider == "openrouter"` (the bare default — never named connections like `"openrouter:my-key"`) AND a non-empty `api_key`.
+- Groups them by api_key value (so endpoints sharing a key share one connection — dedup).
+- Creates a `PhoenixKit.Integrations` connection per distinct key. Naming: `"openrouter:default"` for single-key deployments; `"openrouter:imported-1"`, `"openrouter:imported-2"` for multi-key deployments.
+- Updates each endpoint's `provider` field to point at the new connection key.
+- **Never clears the legacy `api_key` column** — it stays as a safety-net fallback. `OpenRouterClient.resolve_api_key/2` prefers Integrations, so post-migration endpoints stop firing the legacy warning.
+
+Idempotency guards (any one short-circuits):
+
+- The `ai_legacy_api_key_migration_completed_at` setting is set → skip.
+- ANY `integration:openrouter:*` key already exists in `phoenix_kit_settings` (operator already set up Integrations manually) → mark complete and skip.
+- No endpoints need migrating → mark complete and skip.
+
+Failure modes are contained: a top-level `try/rescue/catch :exit` shell ensures the migration never crashes host-app boot. Per-key-group operations are isolated — one bad group doesn't abort others. Partial migration is safe because un-migrated endpoints still resolve via the legacy fallback path.
+
+The migration is opt-in (you must call it explicitly). Operators who prefer to migrate manually via the admin UI can simply not call the function — the resolver's legacy fallback path keeps existing endpoints working indefinitely.
+
 ## Testing
 
 ### Running tests

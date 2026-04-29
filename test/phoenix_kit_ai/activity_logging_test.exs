@@ -22,7 +22,7 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
             name: "Activity Test Created",
             provider: "openrouter",
             model: "a/b",
-          api_key: "sk-test-key"
+            api_key: "sk-test-key"
           },
           actor_uuid: actor,
           actor_role: "admin"
@@ -130,7 +130,7 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
             name: "Stays Same #{System.unique_integer([:positive])}",
             provider: "openrouter",
             model: "a/b",
-          api_key: "sk-test-key"
+            api_key: "sk-test-key"
           },
           actor_uuid: actor,
           actor_role: "admin"

@@ -539,6 +539,7 @@ defmodule PhoenixKitAI.OpenRouterClientCoverageTest do
 
       # First call logs; second is silent (the throttle fired).
       assert first =~ "deprecated endpoint.api_key"
+
       refute second =~ "deprecated endpoint.api_key",
              "expected second call to be a silent no-op via :persistent_term"
     end

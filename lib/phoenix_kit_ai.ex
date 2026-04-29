@@ -380,6 +380,221 @@ defmodule PhoenixKitAI do
   end
 
   @doc """
+  One-shot auto-migrator for legacy `endpoint.api_key` values into
+  `PhoenixKit.Integrations` connections.
+
+  Mirrors the pattern of `PhoenixKit.Integrations.run_legacy_migrations/0`
+  — call it at host-app boot to fold pre-Integrations endpoint api_keys
+  into the named-connection model. Safe to call multiple times:
+  multiple idempotency guards short-circuit on already-migrated state.
+
+  ## What it does
+
+  For each `phoenix_kit_ai_endpoints` row whose `provider` is the bare
+  string `"openrouter"` (i.e., NOT already pointing at a named
+  Integrations connection like `"openrouter:my-key"`) AND whose
+  `api_key` is non-empty:
+
+  1. Group by api_key value — endpoints sharing a key share one
+     connection (dedup).
+  2. Create a `PhoenixKit.Integrations` connection per distinct key.
+     Naming: `"openrouter:default"` if there's exactly one key in the
+     deployment; `"openrouter:imported-1"`, `"openrouter:imported-2"`
+     (1-indexed by first-seen order) if there are multiple.
+  3. Update each endpoint's `provider` field to point at the new
+     connection key (e.g., `"openrouter:default"`).
+
+  The legacy `api_key` column is NEVER cleared — it stays on each row
+  as a safety net. `OpenRouterClient.resolve_api_key/2` prefers
+  Integrations, so post-migration endpoints stop firing the legacy
+  warning; if Integrations later breaks for any reason, the column
+  still has the value and the fallback path keeps working.
+
+  ## Idempotency guards (any one short-circuits)
+
+  - The `ai_legacy_api_key_migration_completed_at` setting is set →
+    already ran, skip.
+  - ANY `integration:openrouter:*` key already exists in
+    `phoenix_kit_settings` (operator already set up Integrations
+    manually) → mark completed and skip.
+  - NO endpoints have `provider == "openrouter"` with a non-empty
+    `api_key` → nothing to migrate, mark completed.
+
+  ## Failure modes
+
+  Top-level `try/rescue/catch :exit` so DB outages, race conditions,
+  or any unexpected exception NEVER crashes the host app's boot.
+  Per-key-group operations are isolated — one bad group doesn't abort
+  the others. Partial migration is safe because un-migrated endpoints
+  still resolve via the legacy fallback path.
+
+  ## Configuration
+
+  No options. Disable by simply not calling the function.
+  """
+  @spec run_legacy_api_key_migration() :: :ok
+  def run_legacy_api_key_migration do
+    case do_run_legacy_api_key_migration() do
+      :skipped ->
+        :ok
+
+      {:migrated, count} ->
+        require Logger
+
+        Logger.info(
+          "[PhoenixKitAI] Auto-migrated #{count} endpoint(s) from legacy api_key " <>
+            "to PhoenixKit.Integrations connections"
+        )
+
+        :ok
+    end
+  rescue
+    e ->
+      require Logger
+
+      Logger.warning(
+        "[PhoenixKitAI] Legacy api_key migration crashed (host boot continues): " <>
+          Exception.message(e)
+      )
+
+      :ok
+  catch
+    :exit, _reason ->
+      :ok
+  end
+
+  defp do_run_legacy_api_key_migration do
+    cond do
+      not Code.ensure_loaded?(PhoenixKit.Integrations) ->
+        :skipped
+
+      legacy_api_key_migration_completed?() ->
+        :skipped
+
+      any_openrouter_integration_exists?() ->
+        # Operator already set up Integrations manually — record that
+        # we've reached the desired end state and skip future runs.
+        mark_legacy_api_key_migration_complete()
+        :skipped
+
+      true ->
+        attempt_legacy_api_key_migration()
+    end
+  end
+
+  defp legacy_api_key_migration_completed? do
+    Settings.get_setting("ai_legacy_api_key_migration_completed_at", nil) != nil
+  rescue
+    # Settings table missing in this environment — treat as not completed
+    # but the next guard (any_openrouter_integration_exists?) will trip
+    # on the same missing infra and we'll skip safely.
+    _ -> false
+  end
+
+  defp any_openrouter_integration_exists? do
+    query =
+      from(s in "phoenix_kit_settings",
+        where: like(s.key, "integration:openrouter:%"),
+        select: count(s.uuid)
+      )
+
+    repo().one(query) > 0
+  rescue
+    # If the settings table or column shape isn't what we expect, fall
+    # through to "yes, skip" — safer than risking a partial migration
+    # against an unfamiliar schema.
+    _ -> true
+  end
+
+  defp attempt_legacy_api_key_migration do
+    candidates = list_legacy_api_key_endpoints()
+
+    if Enum.empty?(candidates) do
+      mark_legacy_api_key_migration_complete()
+      :skipped
+    else
+      grouped_by_key = Enum.group_by(candidates, & &1.api_key)
+      total_groups = map_size(grouped_by_key)
+
+      migrated_count =
+        grouped_by_key
+        |> Enum.with_index(1)
+        |> Enum.reduce(0, fn {{api_key, endpoints}, index}, acc ->
+          name = legacy_connection_name(total_groups, index)
+          acc + migrate_endpoint_group(name, api_key, endpoints)
+        end)
+
+      mark_legacy_api_key_migration_complete()
+      {:migrated, migrated_count}
+    end
+  end
+
+  defp list_legacy_api_key_endpoints do
+    # Only touch endpoints whose provider is the bare "openrouter"
+    # string. Endpoints already pointing at a named connection (e.g.
+    # "openrouter:my-key") have been migrated by hand or by an earlier
+    # run — leave them alone.
+    query =
+      from(e in Endpoint,
+        where:
+          e.provider == "openrouter" and
+            not is_nil(e.api_key) and
+            e.api_key != "",
+        select: %{uuid: e.uuid, api_key: e.api_key, name: e.name}
+      )
+
+    repo().all(query)
+  rescue
+    _ -> []
+  end
+
+  defp legacy_connection_name(1, _index), do: "default"
+  defp legacy_connection_name(_total, index), do: "imported-#{index}"
+
+  defp migrate_endpoint_group(name, api_key, endpoints) do
+    case PhoenixKit.Integrations.save_setup("openrouter:#{name}", %{"api_key" => api_key}) do
+      {:ok, _saved} ->
+        update_endpoints_provider(endpoints, "openrouter:#{name}")
+
+      {:error, _reason} ->
+        require Logger
+
+        Logger.warning(
+          "[PhoenixKitAI] Skipping legacy api_key group (#{length(endpoints)} endpoints) — " <>
+            "save_setup failed"
+        )
+
+        0
+    end
+  rescue
+    _ -> 0
+  end
+
+  defp update_endpoints_provider(endpoints, new_provider) do
+    uuids = Enum.map(endpoints, & &1.uuid)
+
+    {count, _} =
+      from(e in Endpoint, where: e.uuid in ^uuids)
+      |> repo().update_all(set: [provider: new_provider, updated_at: DateTime.utc_now()])
+
+    count
+  rescue
+    _ -> 0
+  end
+
+  defp mark_legacy_api_key_migration_complete do
+    Settings.update_setting_with_module(
+      "ai_legacy_api_key_migration_completed_at",
+      DateTime.utc_now() |> DateTime.to_iso8601(),
+      module_key()
+    )
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  @doc """
   Gets the AI module configuration with statistics.
 
   Stat queries are wrapped in a try/rescue so that environments without a

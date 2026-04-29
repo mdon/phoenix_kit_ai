@@ -62,5 +62,4 @@ defmodule PhoenixKitAI.DestructiveRescueTest do
       assert config.total_tokens == 0
     end
   end
-
 end

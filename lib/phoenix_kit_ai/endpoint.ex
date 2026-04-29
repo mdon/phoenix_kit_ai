@@ -15,10 +15,18 @@ defmodule PhoenixKitAI.Endpoint do
   ### Provider Configuration
   - `provider`: Integration connection key (e.g. `"openrouter"` or
     `"openrouter:my-key"`). Resolved via `PhoenixKit.Integrations`.
-  - `api_key`: **Deprecated.** Legacy field retained only so pre-Integrations
-    endpoints keep working. New endpoints should leave this blank and set
-    up an OpenRouter connection under Settings → Integrations instead.
-    Will be removed in a future major version.
+  - `api_key`: **Deprecated.** Legacy field retained for pre-Integrations
+    endpoints — `OpenRouterClient.resolve_api_key/2` reads it as a fallback
+    when no `PhoenixKit.Integrations` connection is configured for the
+    endpoint's `provider`. The column is `NOT NULL` in core's V34
+    migration, so for now you must provide a value (an empty string is
+    accepted by the DB but will trigger a per-call `Logger.warning`
+    if no Integrations connection is set up either). The recommended
+    migration path is documented in `AGENTS.md` "Migrating from legacy
+    `endpoint.api_key`" — set up an OpenRouter connection under Settings
+    → Integrations and point `provider` at it; the legacy column then
+    becomes unused. Planned for removal in a future major version once
+    operators have had time to migrate.
   - `base_url`: Optional custom base URL for the provider
   - `provider_settings`: Provider-specific settings (JSON)
     - For OpenRouter: `http_referer`, `x_title` headers
