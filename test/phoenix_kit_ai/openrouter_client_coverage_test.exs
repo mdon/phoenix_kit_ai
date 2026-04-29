@@ -459,4 +459,170 @@ defmodule PhoenixKitAI.OpenRouterClientCoverageTest do
       assert length(models) >= 8
     end
   end
+
+  describe "maybe_add_header / maybe_add_opt empty-string branches" do
+    test "build_headers with empty http_referer + x_title omits both headers" do
+      # Pin `maybe_add_header(headers, _name, "") -> headers` (no-op).
+      headers = OpenRouterClient.build_headers("sk-test", http_referer: "", x_title: "")
+
+      assert {"Authorization", "Bearer sk-test"} in headers
+      refute Enum.any?(headers, fn {name, _} -> name == "HTTP-Referer" end)
+      refute Enum.any?(headers, fn {name, _} -> name == "X-Title" end)
+    end
+
+    test "build_headers_from_account with empty settings strings omits both headers" do
+      # Pin `maybe_add_opt(opts, _key, "") -> opts` (no-op).
+      account = %{
+        api_key: "sk-test",
+        settings: %{"http_referer" => "", "x_title" => ""}
+      }
+
+      headers = OpenRouterClient.build_headers_from_account(account)
+
+      refute Enum.any?(headers, fn {name, _} -> name == "HTTP-Referer" end)
+      refute Enum.any?(headers, fn {name, _} -> name == "X-Title" end)
+    end
+  end
+
+  describe "parse_price — partial pricing map (one key missing)" do
+    test "model with prompt-price only triggers parse_price(nil) for completion" do
+      # Pin `parse_price(nil)` clause via a model whose pricing map
+      # has only `prompt` set; `pricing["completion"]` returns nil.
+      stub_response(200, %{
+        "data" => [
+          %{
+            "id" => "partial-pricing/test",
+            "context_length" => 1000,
+            "architecture" => %{
+              "input_modalities" => ["text"],
+              "output_modalities" => ["text"]
+            },
+            "pricing" => %{"prompt" => "0.001"}
+            # Missing "completion" key intentionally — exercises parse_price(nil).
+          }
+        ]
+      })
+
+      assert {:ok, [model]} = OpenRouterClient.fetch_models("sk-test")
+      assert model.id == "partial-pricing/test"
+      assert model.pricing["completion"] == 0
+    end
+  end
+
+  describe "warn_legacy_api_key/1 — :persistent_term throttle (one-shot)" do
+    test "second call for the same endpoint UUID is a silent no-op" do
+      # Pin the throttle: a fresh endpoint UUID warns once, the
+      # second call hits `:persistent_term.get/2` → `:warned` → `:ok`.
+      # Without the throttle, every chat completion would re-flood the
+      # log for legacy api_key endpoints. We drive the warning via the
+      # public `build_headers_from_endpoint/1` which calls
+      # `resolve_api_key` → `warn_legacy_api_key`.
+      uuid = Ecto.UUID.generate()
+
+      endpoint = %PhoenixKitAI.Endpoint{
+        uuid: uuid,
+        name: "Legacy",
+        provider: "openrouter:nonexistent",
+        provider_settings: %{},
+        api_key: "sk-legacy"
+      }
+
+      first =
+        capture_log(fn ->
+          OpenRouterClient.warn_legacy_api_key(endpoint)
+        end)
+
+      second =
+        capture_log(fn ->
+          OpenRouterClient.warn_legacy_api_key(endpoint)
+        end)
+
+      # First call logs; second is silent (the throttle fired).
+      assert first =~ "deprecated endpoint.api_key"
+      refute second =~ "deprecated endpoint.api_key",
+             "expected second call to be a silent no-op via :persistent_term"
+    end
+  end
+
+  describe "extract_provider — non-string ids fall through to \"Unknown\"" do
+    test "non-binary id returns \"Unknown\"" do
+      # Catch-all clause for non-string ids (data that slipped past the
+      # public API — malformed JSON, etc.).
+      assert OpenRouterClient.extract_provider(nil) == "Unknown"
+      assert OpenRouterClient.extract_provider(123) == "Unknown"
+    end
+  end
+
+  describe "extract_model_name — non-binary fall-through" do
+    test "non-binary id returns \"Unknown\"" do
+      # `_ -> "Unknown"` clause when the id isn't a binary.
+      assert OpenRouterClient.extract_model_name(nil) == "Unknown"
+      assert OpenRouterClient.extract_model_name(123) == "Unknown"
+    end
+  end
+
+  describe "humanize_provider — unknown slug fallback" do
+    test "non-binary input returns \"Unknown\"" do
+      assert OpenRouterClient.humanize_provider(nil) == "Unknown"
+      assert OpenRouterClient.humanize_provider(:not_a_string) == "Unknown"
+    end
+  end
+
+  describe "parse_price — pricing-shape edges via fetch_models" do
+    test "models with non-number pricing strings, missing prices, and bare-id slugs all parse" do
+      stub_response(200, %{
+        "data" => [
+          # No prices at all.
+          %{
+            "id" => "no-prefix-id",
+            "context_length" => 1000,
+            "architecture" => %{
+              "input_modalities" => ["text"],
+              "output_modalities" => ["text"]
+            }
+          },
+          # Pricing as a non-numeric string (parse_price falls through
+          # to `:error -> 0`).
+          %{
+            "id" => "broken-prices/test",
+            "context_length" => 1000,
+            "architecture" => %{
+              "input_modalities" => ["text"],
+              "output_modalities" => ["text"]
+            },
+            "pricing" => %{"prompt" => "not-a-number", "completion" => "also-bad"}
+          },
+          # Pricing as an integer (number-clause matches directly).
+          %{
+            "id" => "int-prices/test",
+            "context_length" => 1000,
+            "architecture" => %{
+              "input_modalities" => ["text"],
+              "output_modalities" => ["text"]
+            },
+            "pricing" => %{"prompt" => 5, "completion" => 10}
+          },
+          # Pricing as an unrecognised shape (parse_price `_ -> 0`).
+          %{
+            "id" => "weird-prices/test",
+            "context_length" => 1000,
+            "architecture" => %{
+              "input_modalities" => ["text"],
+              "output_modalities" => ["text"]
+            },
+            "pricing" => %{"prompt" => %{nested: "map"}, "completion" => [1, 2]}
+          }
+        ]
+      })
+
+      assert {:ok, models} = OpenRouterClient.fetch_models("sk-test")
+
+      # All four models survived — none crashed on weird pricing shapes.
+      ids = Enum.map(models, & &1.id)
+      assert "no-prefix-id" in ids
+      assert "broken-prices/test" in ids
+      assert "int-prices/test" in ids
+      assert "weird-prices/test" in ids
+    end
+  end
 end

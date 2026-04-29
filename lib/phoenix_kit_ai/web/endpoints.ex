@@ -216,16 +216,15 @@ defmodule PhoenixKitAI.Web.Endpoints do
   defp parse_date_filter(value) when value in @valid_date_filters, do: value
   defp parse_date_filter(_), do: "7d"
 
-  # Endpoint filter can be integer ID or UUID
+  # Endpoint filter — always a UUID string in the current schema
+  # (`Request.endpoint_uuid`). Earlier versions of this column were
+  # an integer ID, which is why this helper used to coerce numeric
+  # strings to integers. Now the consumer (`maybe_filter_by/3` on
+  # `:endpoint_uuid`) only accepts binary, so we keep the value as
+  # a string. Empty / nil → nil so `maybe_filter_by` skips the clause.
   defp parse_endpoint_filter(nil), do: nil
   defp parse_endpoint_filter(""), do: nil
-
-  defp parse_endpoint_filter(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {int, ""} -> int
-      _ -> value
-    end
-  end
+  defp parse_endpoint_filter(value) when is_binary(value), do: value
 
   defp parse_string_param(nil), do: nil
   defp parse_string_param(""), do: nil

@@ -59,6 +59,7 @@ defmodule PhoenixKitAI.PromptChangesetTest do
       slug = Ecto.Changeset.get_field(changeset, :slug)
       assert slug == "my-great-prompt"
     end
+
   end
 
   describe "create_prompt/2 (integration)" do

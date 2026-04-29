@@ -392,8 +392,9 @@ defmodule PhoenixKitAI.OpenRouterClient do
   # on every chat completion, and a per-request warning floods logs for
   # endpoints that haven't migrated to Integrations yet. `:persistent_term`
   # gives us O(1) check + write and survives across processes.
-  defp warn_legacy_api_key(%{uuid: uuid, name: name, api_key: key})
-       when is_binary(key) and key != "" do
+  @doc false
+  def warn_legacy_api_key(%{uuid: uuid, name: name, api_key: key})
+      when is_binary(key) and key != "" do
     key_term = {__MODULE__, :legacy_warned, uuid}
 
     case :persistent_term.get(key_term, :unwarned) do
@@ -412,7 +413,7 @@ defmodule PhoenixKitAI.OpenRouterClient do
     end
   end
 
-  defp warn_legacy_api_key(_), do: :ok
+  def warn_legacy_api_key(_), do: :ok
 
   @doc """
   Returns the base URL for OpenRouter API.

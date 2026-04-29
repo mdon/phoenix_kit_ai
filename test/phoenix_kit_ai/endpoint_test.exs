@@ -73,6 +73,67 @@ defmodule PhoenixKitAI.EndpointTest do
 
       assert changeset.valid?
     end
+
+    test "empty reasoning_effort skips the inclusion check" do
+      # Ecto's `cast/3` strips `""` → `nil`, so passing
+      # `reasoning_effort: ""` in params would route through the
+      # `nil` clause. Set the field on the struct directly so
+      # `get_field/2` falls back to `""`, hitting the `"" -> changeset`
+      # clause specifically (workspace AGENTS.md "Coverage push pattern"
+      # struct-data fall-through technique).
+      changeset =
+        Endpoint.changeset(
+          %Endpoint{reasoning_effort: ""},
+          %{
+            name: "Reasoning Probe #{System.unique_integer([:positive])}",
+            provider: "openrouter",
+            model: "a/b"
+          }
+        )
+
+      assert changeset.valid?
+      refute errors_on(changeset)[:reasoning_effort]
+    end
+
+    test "changeset with explicitly-nil temperature passes the validate_temperature nil clause" do
+      # Pin the `nil -> changeset` clause of validate_temperature/1.
+      # The schema sets `default: 0.7` for temperature, so a fresh
+      # struct's `get_field(:temperature)` returns 0.7. To hit the nil
+      # branch we set it on the struct explicitly to nil.
+      changeset =
+        Endpoint.changeset(
+          %Endpoint{temperature: nil},
+          %{
+            name: "NilTemp Probe #{System.unique_integer([:positive])}",
+            provider: "openrouter",
+            model: "a/b"
+          }
+        )
+
+      assert changeset.valid?
+    end
+
+    test "non-integer reasoning_max_tokens falls through silently" do
+      # Pin the `_ -> changeset` fall-through of validate_reasoning_max_tokens/1.
+      # Bypass cast/3's normalisation by setting the field directly on
+      # the struct as a non-integer value (`get_field/2` returns it
+      # unchanged for the validation step). This hits the `_` clause
+      # which keeps the changeset clean — the validator deliberately
+      # doesn't double-up on cast errors when the type is wrong.
+      changeset =
+        Endpoint.changeset(
+          %Endpoint{reasoning_max_tokens: %{not: "an_int"}},
+          %{
+            name: "ReasonMaxTokens Probe #{System.unique_integer([:positive])}",
+            provider: "openrouter",
+            model: "a/b"
+          }
+        )
+
+      # Should not have a reasoning_max_tokens validation error from
+      # the validator (the `_ -> changeset` clause is a no-op).
+      refute errors_on(changeset)[:reasoning_max_tokens]
+    end
   end
 
   describe "masked_api_key/1" do
@@ -355,6 +416,86 @@ defmodule PhoenixKitAI.EndpointTest do
 
       assert errors_on(changeset)[:base_url]
              |> Enum.any?(&(&1 =~ "private/loopback/link-local"))
+    end
+
+    test "IPv6 unspecified address `::` is rejected" do
+      changeset = ssrf_changeset("http://[::]/")
+      refute changeset.valid?
+
+      assert errors_on(changeset)[:base_url]
+             |> Enum.any?(&(&1 =~ "private/loopback/link-local"))
+    end
+
+    test "empty base_url passes the validate_base_url empty-string clause" do
+      # Pin the `"" -> changeset` clause of validate_base_url/1. The
+      # field is set on the struct so `get_field/2` returns `""`
+      # directly — Ecto's `cast/3` would otherwise normalise empty
+      # strings to nil before reaching the validator.
+      changeset =
+        Endpoint.changeset(
+          %Endpoint{base_url: ""},
+          %{
+            name: "Empty Probe #{System.unique_integer([:positive])}",
+            provider: "openrouter",
+            model: "a/b"
+          }
+        )
+
+      base_url_errors = errors_on(changeset)[:base_url] || []
+      refute Enum.any?(base_url_errors, &(&1 =~ "scheme")),
+             "expected empty base_url to skip the SSRF check"
+    end
+
+    test "non-string base_url is rejected with a type error" do
+      # Bypass `cast/3`'s string normalisation by setting the field
+      # directly on the struct, then run the changeset on top. The
+      # `_ -> add_error(:base_url, "must be a string")` clause fires.
+      changeset =
+        Endpoint.changeset(
+          %Endpoint{base_url: %{not: "a string"}},
+          %{
+            name: "Bad URL Probe #{System.unique_integer([:positive])}",
+            provider: "openrouter",
+            model: "a/b"
+          }
+        )
+
+      refute changeset.valid?
+      assert errors_on(changeset)[:base_url] |> Enum.any?(&(&1 =~ "must be a string"))
+    end
+
+    test "non-standard IPv4 encodings (octal, decimal-integer, hex) are rejected" do
+      # OTP's `:inet.parse_address/1` currently accepts all three encodings
+      # as the same IPv4 literal — e.g. `0177.0.0.1` / `2130706433` /
+      # `0x7f000001` all resolve to `{127, 0, 0, 1}`. The existing
+      # loopback / RFC1918 / link-local clauses then catch them.
+      #
+      # This test pins that rejection behaviour. If a future OTP regresses
+      # and starts treating these as opaque non-literal hostnames,
+      # `internal_host?/1` falls through to `false` and the SSRF guard's
+      # bypass surface widens silently — this test catches that as a
+      # failure rather than letting it ship.
+      for url <- [
+            # Octal-encoded loopback
+            "http://0177.0.0.1/",
+            # Decimal-integer-encoded loopback (127.0.0.1 = 2130706433)
+            "http://2130706433/",
+            # Hex-encoded loopback
+            "http://0x7f000001/",
+            # Decimal-integer-encoded AWS metadata (169.254.169.254 = 2852039166)
+            "http://2852039166/",
+            # Decimal-integer-encoded RFC1918 (10.0.0.1 = 167772161)
+            "http://167772161/"
+          ] do
+        changeset = ssrf_changeset(url)
+
+        refute changeset.valid?,
+               "expected #{url} to be rejected (encoded literal IPv4 form)"
+
+        assert errors_on(changeset)[:base_url]
+               |> Enum.any?(&(&1 =~ "private/loopback/link-local")),
+               "expected #{url} to fail with the private/loopback/link-local error"
+      end
     end
   end
 

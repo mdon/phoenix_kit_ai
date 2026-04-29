@@ -19,6 +19,20 @@ defmodule PhoenixKitAI.MixProject do
         "AI module for PhoenixKit — endpoints, prompts, completions, and usage tracking",
       package: package(),
 
+      # Coverage — filter test-support modules out of the percentage so
+      # the report reflects production code only. Test infra exists for
+      # the test suite's own setup, not for production behaviour. See
+      # workspace AGENTS.md "Coverage push pattern".
+      test_coverage: [
+        ignore_modules: [
+          ~r/^PhoenixKitAI\.Test\./,
+          PhoenixKitAI.DataCase,
+          PhoenixKitAI.LiveCase,
+          PhoenixKitAI.ActivityLogAssertions,
+          ~r/^Jason\.Encoder\./
+        ]
+      ],
+
       # Dialyzer
       dialyzer: [plt_add_apps: [:phoenix_kit]],
 

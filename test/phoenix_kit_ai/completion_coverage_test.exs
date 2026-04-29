@@ -263,6 +263,109 @@ defmodule PhoenixKitAI.CompletionCoverageTest do
     end
   end
 
+  describe "build_chat_body — empty-list stop opt" do
+    test "stop: [] in opts triggers maybe_add(map, _, []) no-op clause" do
+      # Pin `defp maybe_add(map, _key, []), do: map` (line 274 in
+      # `completion.ex`). The `:stop` opt is the only naturally
+      # list-typed knob in chat_completion; passing `stop: []`
+      # threads through `Keyword.get(opts, :stop)` → `[]` →
+      # `maybe_add("stop", [])` → returns map unchanged.
+      stub_response(200, success_payload("ok"))
+      ep = endpoint_fixture()
+
+      assert {:ok, _response} =
+               Completion.chat_completion(ep, [%{role: "user", content: "Hi"}], stop: [])
+
+      # The request body should NOT contain a `stop` field — the
+      # empty-list clause short-circuits before Map.put fires.
+      # We can't directly inspect the sent body via Req.Test stub
+      # without a fixture-side capture, so rely on the call
+      # succeeding without crashing as the load-bearing assertion
+      # (the `[]` clause exists because passing `stop: []` would
+      # otherwise produce a body with `"stop": []` which OpenRouter
+      # might reject).
+    end
+  end
+
+  describe "capture_request_content opt-out (PII gate)" do
+    setup do
+      # Default is `true` — flip off for this describe block to drive
+      # the redacted-content branches. The on_exit deletes the env so
+      # the next test inherits the default.
+      Application.put_env(:phoenix_kit_ai, :capture_request_content, false)
+      on_exit(fn -> Application.delete_env(:phoenix_kit_ai, :capture_request_content) end)
+      :ok
+    end
+
+    test "successful chat completion writes content_redacted instead of messages/response" do
+      stub_response(200, success_payload("redacted reply"))
+      ep = endpoint_fixture()
+
+      assert {:ok, _} =
+               PhoenixKitAI.complete(ep.uuid, [%{role: "user", content: "secret prompt"}])
+
+      requests = PhoenixKitAI.list_requests() |> elem(0)
+      row = Enum.find(requests, &(&1.endpoint_uuid == ep.uuid and &1.status == "success"))
+      refute is_nil(row), "expected a success row to land"
+
+      # Content is redacted — neither the user message nor the assistant
+      # response live in metadata.
+      assert row.metadata["content_redacted"] == true
+      refute Map.has_key?(row.metadata, "messages")
+      refute Map.has_key?(row.metadata, "response")
+      refute Map.has_key?(row.metadata, "request_payload")
+
+      # Token counts / cost / latency are still recorded — the gate
+      # only redacts user-typed strings, not aggregate billing data.
+      assert row.input_tokens == 5
+      assert row.output_tokens == 3
+      assert row.total_tokens == 8
+    end
+
+    test "failed chat completion also writes content_redacted" do
+      stub_transport_error(:nxdomain)
+      ep = endpoint_fixture()
+
+      assert {:error, {:connection_error, :nxdomain}} =
+               PhoenixKitAI.complete(ep.uuid, [%{role: "user", content: "secret prompt"}])
+
+      requests = PhoenixKitAI.list_requests() |> elem(0)
+      row = Enum.find(requests, &(&1.endpoint_uuid == ep.uuid and &1.status == "error"))
+      refute is_nil(row), "expected an error row to land"
+
+      assert row.metadata["content_redacted"] == true
+      refute Map.has_key?(row.metadata, "messages")
+
+      # The original error_reason is still preserved (machine-readable
+      # filter shape) — it's not user-supplied content.
+      assert row.metadata["error_reason"] == "{:connection_error, :nxdomain}"
+      assert row.error_message =~ "Connection error"
+    end
+  end
+
+  describe "capture_request_content default-on (preserved shipped behaviour)" do
+    test "successful chat completion persists messages + response by default" do
+      # No Application.put_env here — relies on the default.
+      Application.delete_env(:phoenix_kit_ai, :capture_request_content)
+
+      stub_response(200, success_payload("hello!"))
+      ep = endpoint_fixture()
+
+      assert {:ok, _} =
+               PhoenixKitAI.complete(ep.uuid, [%{role: "user", content: "hi"}])
+
+      requests = PhoenixKitAI.list_requests() |> elem(0)
+      row = Enum.find(requests, &(&1.endpoint_uuid == ep.uuid and &1.status == "success"))
+      refute is_nil(row)
+
+      # Default-on shape: messages + response present, no redaction flag.
+      refute Map.has_key?(row.metadata, "content_redacted")
+      assert is_list(row.metadata["messages"])
+      assert row.metadata["response"] == "hello!"
+      assert is_map(row.metadata["request_payload"])
+    end
+  end
+
   describe "PhoenixKitAI.ask/3" do
     test "wraps the user prompt and returns the response map" do
       stub_response(200, success_payload("Greetings!"))
