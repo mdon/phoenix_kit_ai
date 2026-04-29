@@ -133,6 +133,18 @@ defmodule PhoenixKitAI.CoverageTest do
       assert is_integer(config.total_requests)
       assert is_integer(config.total_tokens)
     end
+
+    test "disable_system/0 + enable_system/0 round-trip the ai_enabled flag" do
+      # `enable_system/0` is exercised by every LV test's setup, so it
+      # has plenty of coverage already. `disable_system/0` was only
+      # behaviour-asserted (function_exported?) — pin the actual
+      # round-trip here.
+      assert {:ok, _} = PhoenixKitAI.disable_system()
+      refute PhoenixKitAI.enabled?()
+
+      assert {:ok, _} = PhoenixKitAI.enable_system()
+      assert PhoenixKitAI.enabled?()
+    end
   end
 
   describe "endpoint listing — sort + filter + paginate" do

@@ -124,6 +124,27 @@ defmodule PhoenixKitAI.LegacyApiKeyMigrationTest do
   end
 
   describe "single-key deployment (most common case)" do
+    test "successful migration emits a Logger.info summary" do
+      # Pin the Logger.info "[PhoenixKitAI] Auto-migrated N endpoint(s)"
+      # branch — fires only on the {:migrated, count} return from
+      # do_run_legacy_api_key_migration/0. Test config sets
+      # `level: :warning` which filters info BEFORE capture_log sees
+      # it, so we lift the global level for this test (workspace
+      # AGENTS.md "Logger.level must be lifted" trap).
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+
+      _ep = legacy_endpoint_fixture("sk-log-test")
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :info], fn ->
+          assert :ok = PhoenixKitAI.run_legacy_api_key_migration()
+        end)
+
+      assert log =~ "Auto-migrated 1 endpoint(s) from legacy api_key"
+    end
+
     test "single endpoint with one api_key migrates to openrouter:default" do
       ep = legacy_endpoint_fixture("sk-only-key")
 
