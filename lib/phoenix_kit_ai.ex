@@ -195,22 +195,77 @@ defmodule PhoenixKitAI do
   # ACTIVITY LOGGING HELPERS
   # ===========================================
 
-  # Log a successful endpoint mutation. Failures in the primary
-  # operation bypass logging entirely; logging failures never crash the
-  # caller thanks to the rescue.
+  # Log a successful endpoint mutation. The failure-branch row is
+  # written by `log_failed_endpoint_mutation/3` lower down. Together
+  # they ensure the audit feed records every user-initiated mutation
+  # attempt, including ones that failed due to validation, FK
+  # violations, or DB outages. `metadata.db_pending: true`
+  # distinguishes attempted-but-failed from completed actions.
   defp log_endpoint_activity({:ok, endpoint} = result, action, opts) do
-    log_activity(action, endpoint, "endpoint", opts, %{"name" => endpoint.name})
+    log_activity(action, "endpoint", endpoint.uuid, opts, %{"name" => endpoint.name})
     result
   end
 
   defp log_endpoint_activity(error, _action, _opts), do: error
 
   defp log_prompt_activity({:ok, prompt} = result, action, opts) do
-    log_activity(action, prompt, "prompt", opts, %{"name" => prompt.name})
+    log_activity(action, "prompt", prompt.uuid, opts, %{"name" => prompt.name})
     result
   end
 
   defp log_prompt_activity(error, _action, _opts), do: error
+
+  # Failure-branch audit row. Writes `metadata.db_pending: true` plus
+  # the validation `error_keys` so the audit feed can distinguish
+  # attempted-but-failed from completed mutations. Returns the result
+  # unchanged so callers can continue piping. No-op on `{:ok, _}`.
+  defp log_failed_endpoint_mutation(
+         {:error, %Ecto.Changeset{} = changeset} = result,
+         action,
+         opts
+       ) do
+    log_activity(
+      action,
+      "endpoint",
+      Map.get(changeset.data, :uuid),
+      opts,
+      failure_metadata(changeset, :name)
+    )
+
+    result
+  end
+
+  defp log_failed_endpoint_mutation(result, _action, _opts), do: result
+
+  defp log_failed_prompt_mutation(
+         {:error, %Ecto.Changeset{} = changeset} = result,
+         action,
+         opts
+       ) do
+    log_activity(
+      action,
+      "prompt",
+      Map.get(changeset.data, :uuid),
+      opts,
+      failure_metadata(changeset, :name)
+    )
+
+    result
+  end
+
+  defp log_failed_prompt_mutation(result, _action, _opts), do: result
+
+  # PII-safe failure metadata — `name` is the only changeset field we
+  # surface (the resource's display string, already public in the admin
+  # UI); `error_keys` is the list of failed validation keys, never the
+  # rejected values themselves.
+  defp failure_metadata(changeset, name_field) do
+    %{
+      "name" => Ecto.Changeset.get_field(changeset, name_field),
+      "db_pending" => true,
+      "error_keys" => changeset.errors |> Keyword.keys() |> Enum.map(&Atom.to_string/1)
+    }
+  end
 
   # Enable/disable toggle — logs only when the flag actually changes.
   defp maybe_log_endpoint_toggle({:ok, endpoint} = result, was_enabled, opts) do
@@ -234,7 +289,7 @@ defmodule PhoenixKitAI do
   defp maybe_log_prompt_toggle(error, _, _), do: error
 
   defp log_toggle(result, action, resource, resource_type, opts) do
-    log_activity(action, resource, resource_type, opts, %{"name" => resource.name})
+    log_activity(action, resource_type, resource.uuid, opts, %{"name" => resource.name})
     result
   end
 
@@ -246,7 +301,7 @@ defmodule PhoenixKitAI do
   # run the core PhoenixKit migrations yet simply don't have the
   # `phoenix_kit_activities` table, so logging would be noise on every
   # mutation. Any other failure is logged so real bugs aren't hidden.
-  defp log_activity(action, resource, resource_type, opts, extra) do
+  defp log_activity(action, resource_type, resource_uuid, opts, extra) do
     if Code.ensure_loaded?(PhoenixKit.Activity) do
       metadata =
         %{"actor_role" => Keyword.get(opts, :actor_role, "user")}
@@ -258,7 +313,7 @@ defmodule PhoenixKitAI do
         mode: Keyword.get(opts, :mode, "manual"),
         actor_uuid: Keyword.get(opts, :actor_uuid),
         resource_type: resource_type,
-        resource_uuid: resource.uuid,
+        resource_uuid: resource_uuid,
         metadata: metadata
       })
     end
@@ -695,6 +750,7 @@ defmodule PhoenixKitAI do
     |> repo().insert()
     |> broadcast_endpoint_change(:endpoint_created)
     |> log_endpoint_activity("endpoint.created", opts)
+    |> log_failed_endpoint_mutation("endpoint.created", opts)
   end
 
   @doc """
@@ -719,6 +775,7 @@ defmodule PhoenixKitAI do
     |> broadcast_endpoint_change(:endpoint_updated)
     |> maybe_log_endpoint_update(has_changes, opts)
     |> maybe_log_endpoint_toggle(was_enabled, opts)
+    |> log_failed_endpoint_mutation("endpoint.updated", opts)
   end
 
   defp maybe_log_endpoint_update({:ok, _} = result, true, opts) do
@@ -736,6 +793,7 @@ defmodule PhoenixKitAI do
     repo().delete(endpoint)
     |> broadcast_endpoint_change(:endpoint_deleted)
     |> log_endpoint_activity("endpoint.deleted", opts)
+    |> log_failed_endpoint_mutation("endpoint.deleted", opts)
   end
 
   @doc """
@@ -900,6 +958,7 @@ defmodule PhoenixKitAI do
     |> repo().insert()
     |> broadcast_prompt_change(:prompt_created)
     |> log_prompt_activity("prompt.created", opts)
+    |> log_failed_prompt_mutation("prompt.created", opts)
   end
 
   @doc """
@@ -921,6 +980,7 @@ defmodule PhoenixKitAI do
     |> broadcast_prompt_change(:prompt_updated)
     |> maybe_log_prompt_update(has_changes, opts)
     |> maybe_log_prompt_toggle(was_enabled, opts)
+    |> log_failed_prompt_mutation("prompt.updated", opts)
   end
 
   defp maybe_log_prompt_update({:ok, _} = result, true, opts) do
@@ -938,6 +998,7 @@ defmodule PhoenixKitAI do
     repo().delete(prompt)
     |> broadcast_prompt_change(:prompt_deleted)
     |> log_prompt_activity("prompt.deleted", opts)
+    |> log_failed_prompt_mutation("prompt.deleted", opts)
   end
 
   @doc """

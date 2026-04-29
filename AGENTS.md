@@ -324,3 +324,28 @@ PR review files go in `dev_docs/pull_requests/{year}/{pr_number}-{slug}/` direct
 - **Headless**: Functions/API only, no UI — still gets auto-discovery, toggles, and permissions
 
 `phoenix_kit_ai` is full-featured.
+
+## Future refactor opportunities
+
+Items deliberately deferred — surface them when an unrelated refactor naturally touches the same code, not as standalone work.
+
+### `metadata.error_reason` shape
+
+`log_failed_request/7` and `log_failed_embedding_request/5` (`lib/phoenix_kit_ai.ex`) currently store the failure reason in `metadata.error_reason` via `inspect/1`. So a tagged tuple like `{:connection_error, :nxdomain}` lands in the JSONB column as the string `"{:connection_error, :nxdomain}"`. The original `error_message` column still holds the human-readable, gettext-rendered message via `Errors.message/1` — this is just the machine-readable shadow.
+
+The string form works for ad-hoc grep, but consumers that want to filter by error type have to do string parsing (`metadata->>'error_reason' LIKE '%connection_error%'`). A cleaner shape would be:
+
+```elixir
+# Today
+metadata: %{error_reason: inspect(reason)}
+# → "{:connection_error, :nxdomain}"
+
+# Future
+metadata: %{error_reason: reason}
+# → ["connection_error", "nxdomain"] (Jason coerces tuples to lists, atoms to strings)
+# Filter via JSONB: metadata->'error_reason'->>0 = 'connection_error'
+```
+
+**Why deferred**: no consumer currently filters on `error_reason`. The string form is workable for the only current reader (the activity log UI). A consumer-driven refactor is the right time — the structured shape should match the consumer's filter needs (split kind/data vs. raw list, atoms-as-strings vs. coerced).
+
+**When you do refactor**: also update the assertion in `test/phoenix_kit_ai/completion_coverage_test.exs:~240` that currently pins the inspect-string literal `"{:connection_error, :nxdomain}"`.

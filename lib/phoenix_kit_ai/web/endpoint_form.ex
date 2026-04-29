@@ -160,7 +160,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       |> assign(:integration_connected, false)
       |> assign(:form, to_form(AI.change_endpoint(%Endpoint{})))
       |> assign(:page_title, "AI Endpoint")
-      |> assign(:loaded, false)
+      |> assign(:loaded_id, :unloaded)
 
     {:ok, socket}
   end
@@ -240,7 +240,14 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @impl true
   def handle_params(params, _url, socket) do
-    if socket.assigns.loaded do
+    # `:loaded_id` tracks which `params["id"]` the LV currently has data
+    # for. `:unloaded` is the initial sentinel set in `mount/3`; `nil`
+    # means "loaded as the new-endpoint form"; a binary UUID means
+    # "loaded for that endpoint". Re-loads only when the id actually
+    # changes — handles the `push_patch` case where the same LV process
+    # is reused across `/endpoints/A/edit` → `/endpoints/B/edit` (no
+    # caller does this today, but cheap to be safe for future routes).
+    if socket.assigns.loaded_id == params["id"] do
       {:noreply, socket}
     else
       handle_initial_params(params, socket)
@@ -254,7 +261,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
         |> assign(:project_title, Settings.get_project_title())
         |> assign(:openrouter_connections, Integrations.list_connections("openrouter"))
         |> load_endpoint(params["id"])
-        |> assign(:loaded, true)
+        |> assign(:loaded_id, params["id"])
 
       {:noreply, socket}
     else
