@@ -169,11 +169,14 @@ PhoenixKitAI.list_endpoints(
 {:ok, _}       = PhoenixKitAI.delete_endpoint(endpoint)
 ```
 
-> **API keys are managed via Integrations.** New endpoints should leave
-> `api_key` blank and point `provider` at an OpenRouter connection
-> (default key `"openrouter"`). The legacy `api_key` field is still read
-> for pre-Integrations rows — see [Migrating from legacy
-> `endpoint.api_key`](#migrating-from-legacy-endpointapi_key).
+> **API keys are managed via Integrations.** Point `provider` at an
+> OpenRouter connection (default key `"openrouter"`); the API key is
+> resolved through `PhoenixKit.Integrations` at request time. The
+> legacy `api_key` column is retained as a fallback safety net (and is
+> currently `NOT NULL` in core's V34 — a value must still be provided
+> until a future major version drops the column). See [Migrating from
+> legacy `endpoint.api_key`](#migrating-from-legacy-endpointapi_key)
+> for the recommended workflow and the boot-time auto-migrator.
 
 ## Source tracking & debugging
 
@@ -185,6 +188,8 @@ Every request automatically captures:
 - **Stacktrace** — up to 20 frames.
 - **Caller context** — `request_id` (Phoenix Logger metadata), `node`,
   `pid`.
+- **Message + response content** — full user message list and assistant
+  response text. Default-on; controllable via the config flag below.
 - **Memory snapshot** (opt-in) — enable with
   `config :phoenix_kit_ai, :capture_request_memory, true` when you need
   per-request memory data; off by default to keep JSONB metadata small.
@@ -192,26 +197,97 @@ Every request automatically captures:
 All of this is stored in `phoenix_kit_ai_requests.metadata` (JSONB) and
 surfaced in the admin Usage page's request-details modal.
 
+### Privacy / retention controls
+
+```elixir
+# config/config.exs (defaults shown)
+config :phoenix_kit_ai,
+  # Persist user message + assistant response content in request
+  # metadata. Default `true` matches the shipped debugging shape.
+  # Set to `false` for deployments with PII / data-retention
+  # obligations — token counts, latency, model, and cost are still
+  # recorded; only the user-supplied strings get redacted (replaced
+  # with `metadata.content_redacted: true`).
+  capture_request_content: true,
+
+  # Capture process memory in request `caller_context` (default off).
+  capture_request_memory: false,
+
+  # Bypass SSRF guard on `Endpoint.base_url` — required for
+  # self-hosted Ollama / intranet inference. Off by default; the
+  # guard rejects loopback / RFC1918 / link-local / `*.local` /
+  # non-http(s) URLs unless this is enabled.
+  allow_internal_endpoint_urls: false
+```
+
 ## Migrating from legacy `endpoint.api_key`
 
 Endpoints created before the Integrations migration stored the OpenRouter
-API key directly in the `api_key` column. New endpoints leave that
-column blank and point `provider` at a `PhoenixKit.Integrations`
-connection key instead (e.g. `"openrouter"`).
+API key directly in the `api_key` column. The recommended workflow is to
+point `provider` at a `PhoenixKit.Integrations` connection key (e.g.
+`"openrouter"` or `"openrouter:my-name"`) so the API key flows through
+the centralised Integrations store; `OpenRouterClient.resolve_api_key/2`
+prefers Integrations and falls back to the legacy column with a
+deprecation warning per request.
 
-When `OpenRouterClient.resolve_api_key/2` falls back to the legacy
-column, it emits a `Logger.warning` identifying the endpoint so the
-warning is actionable. To clear it:
+### Manual workflow (per-endpoint)
 
 1. Open **Settings → Integrations** and add an OpenRouter connection if
    one doesn't exist.
 2. Edit the endpoint and select that connection from the
    `integration_picker`.
-3. Save.
+3. Save. The legacy warning stops firing on the next request.
 
-The `api_key` column is retained so pre-migration deployments keep
-working without forced downtime, and is flagged **Deprecated** in
-`PhoenixKitAI.Endpoint` — planned for removal in a future major version.
+### Boot-time auto-migrator
+
+`PhoenixKitAI.run_legacy_api_key_migration/0` is a one-shot auto-migrator
+mirroring the pattern of `PhoenixKit.Integrations.run_legacy_migrations/0`.
+Call it from your host app's `Application.start/2` to fold pre-Integrations
+endpoints automatically:
+
+```elixir
+def start(_type, _args) do
+  children = [...]
+  result = Supervisor.start_link(children, opts)
+
+  # One-shot migrations — safe to call every boot. Idempotent via multiple
+  # guards; never crashes the boot if it fails.
+  PhoenixKit.Integrations.run_legacy_migrations()
+  PhoenixKitAI.run_legacy_api_key_migration()
+
+  result
+end
+```
+
+Behaviour:
+
+- Targets endpoints with `provider == "openrouter"` (the bare default —
+  named connections like `"openrouter:my-key"` are NEVER touched) AND a
+  non-empty `api_key`.
+- Groups by `api_key` value (endpoints sharing a key share one
+  connection — dedup).
+- Creates one Integrations connection per distinct key. Naming:
+  `"openrouter:default"` for single-key deployments;
+  `"openrouter:imported-1"` / `"imported-2"` / etc. for multi-key.
+- Updates each endpoint's `provider` field to point at the new
+  connection key.
+- **Never clears the legacy `api_key` column** — it stays as a
+  safety-net fallback.
+
+Idempotency guards (any one short-circuits): completion-flag setting,
+existing `integration:openrouter:*` key in `phoenix_kit_settings`, no
+endpoints needing migration. Failure modes are contained — top-level
+`try/rescue/catch :exit` shell ensures the migration NEVER crashes the
+host-app boot.
+
+The migration is opt-in (you must call the function explicitly).
+Operators who prefer the manual UI workflow can simply not call it —
+the resolver's legacy fallback path keeps existing endpoints working
+indefinitely.
+
+The `api_key` column itself is flagged **Deprecated** in
+`PhoenixKitAI.Endpoint` and is planned for removal in a future major
+version.
 
 ### Legacy `raw_response` metadata
 
@@ -326,12 +402,22 @@ lib/
 test/
   phoenix_kit_ai_test.exs              # Behaviour compliance tests
   phoenix_kit_ai/
-    completion_test.exs                # HTTP + error parsing
-    endpoint_test.exs                  # Schema + CRUD
+    completion_test.exs                # HTTP + error parsing (unit)
+    completion_coverage_test.exs       # Req.Test-stubbed integration tests
+    endpoint_test.exs                  # Schema + CRUD + SSRF guard
     errors_test.exs                    # Atom → message mapping
-    openrouter_client_test.exs         # API key + model discovery
+    openrouter_client_test.exs         # API key + model discovery (unit)
+    openrouter_client_coverage_test.exs# Req.Test-stubbed integration tests
     prompt_test.exs                    # Variable extraction + changeset
+    prompt_changeset_test.exs          # Persistence + uniqueness
     request_test.exs                   # Schema + format_cost
+    coverage_test.exs                  # Top-level public API integration
+    schema_coverage_test.exs           # Schema-level edge cases
+    activity_logging_test.exs          # Per-action activity log assertions
+    legacy_api_key_migration_test.exs  # Auto-migrator (idempotency + dedup)
+    destructive_rescue_test.exs        # DROP-TABLE-in-sandbox rescue tests
+    web/                               # LiveView smoke + coverage tests
+  support/                             # Test infra (DataCase, LiveCase, etc.)
 ```
 
 ## Database tables

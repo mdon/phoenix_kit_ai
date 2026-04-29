@@ -12,7 +12,7 @@ The omissions below are deliberate so consumers and future contributors don't ex
 
 - **No DB migrations of its own** — every table this module owns (`phoenix_kit_ai_endpoints`, `phoenix_kit_ai_prompts`, `phoenix_kit_ai_requests`) is created by versioned migrations in core `phoenix_kit` (V40+ for `uuid_generate_v7()`, V57+ for the AI tables). Adding a column is a core migration first, then schema + changeset edits here.
 - **No per-completion activity logging** — `PhoenixKit.Activity.log/1` is invoked only on endpoint/prompt CRUD + enable/disable toggles. Per-request usage already lives in `phoenix_kit_ai_requests` with token/cost/latency columns; mirroring it into `phoenix_kit_activities` would double-write the same audit trail.
-- **No automated migration script for legacy `endpoint.api_key`** — pre-Integrations endpoints keep working via the `OpenRouterClient.resolve_api_key/2` fallback path with a `Logger.warning` flagging each call. Users migrate at their own pace through the UI; see "Migrating from legacy `endpoint.api_key`" below.
+- **No forced data migration for legacy `endpoint.api_key`** — `OpenRouterClient.resolve_api_key/2` keeps pre-Integrations endpoints working via fallback to the legacy column with a per-call `Logger.warning`. Operators can migrate at their own pace through the UI, OR opt in to the auto-migrator `PhoenixKitAI.run_legacy_api_key_migration/0` (call from host-app `Application.start/2`) which folds bare-`provider="openrouter"` endpoints into named `Integrations` connections at boot. See "Migrating from legacy `endpoint.api_key`" below.
 - **No public HTTP / API surface** — AI is admin-only. No JSON endpoints, no webhook receivers, no socket forwards. Consumers wire AI completions into their own host code via the `PhoenixKitAI` context module.
 - **No background jobs (Oban)** — completions run synchronously from the calling LiveView (`Playground.handle_info(:do_send, …)`) so the user sees the response inline. Long-running batch generation belongs in the consumer app, not here.
 - **No streaming responses** — `Completion` returns the full `{:ok, response}` shape; OpenRouter's SSE streaming endpoint isn't surfaced. The Playground UI is request/response, not chat-stream.
@@ -99,36 +99,45 @@ This is a **PhoenixKit module** that implements the `PhoenixKit.Module` behaviou
 
 Every mutating context function logs via `PhoenixKit.Activity.log/1`, guarded with `Code.ensure_loaded?/1` + `rescue` so logging failures never crash the primary operation. Mutating functions accept an `opts \\ []` keyword list; LiveViews extract the current user UUID via a private `actor_opts/1` helper.
 
+The internal helper takes resource type + UUID directly (rather than a struct) so both success-path callers (with a saved `Endpoint`/`Prompt`) and failure-path callers (with only an `Ecto.Changeset`) can share the same logger:
+
 ```elixir
-defp log_activity(action, resource, opts, extra \\ %{}) do
+defp log_activity(action, resource_type, resource_uuid, opts, extra) do
   if Code.ensure_loaded?(PhoenixKit.Activity) do
+    metadata =
+      %{"actor_role" => Keyword.get(opts, :actor_role, "user")}
+      |> Map.merge(extra)
+
     PhoenixKit.Activity.log(%{
       action: action,
       module: "ai",
-      mode: "manual",
+      mode: Keyword.get(opts, :mode, "manual"),
       actor_uuid: Keyword.get(opts, :actor_uuid),
-      resource_type: resource_type(resource),
-      resource_uuid: resource.uuid,
-      metadata: Map.merge(%{"actor_role" => Keyword.get(opts, :actor_role, "user")}, extra)
+      resource_type: resource_type,
+      resource_uuid: resource_uuid,
+      metadata: metadata
     })
   end
 rescue
-  _ -> :activity_log_failed
+  e in Postgrex.Error -> ...    # silent on :undefined_table; Logger.warning otherwise
+  e -> log_activity_failure(...)
 end
 ```
 
-Current logged actions:
+Current logged actions (success path AND failure path — both branches log so an admin click survives a DB outage / validation rejection in the audit feed):
 
-| Action | When |
-|--------|------|
-| `endpoint.created` | `create_endpoint/2` |
-| `endpoint.updated` | `update_endpoint/3` |
-| `endpoint.deleted` | `delete_endpoint/2` |
-| `endpoint.enabled` / `endpoint.disabled` | `update_endpoint/3` with a flipped `enabled` field |
-| `prompt.created` | `create_prompt/2` |
-| `prompt.updated` | `update_prompt/3` |
-| `prompt.deleted` | `delete_prompt/2` |
-| `prompt.enabled` / `prompt.disabled` | `update_prompt/3` with a flipped `enabled` field |
+| Action | When | Failure-branch metadata |
+|--------|------|-------------------------|
+| `endpoint.created` | `create_endpoint/2` | `db_pending: true`, `error_keys: [...]` |
+| `endpoint.updated` | `update_endpoint/3` (skipped on no-op `changeset.changes == %{}`) | `db_pending: true`, `error_keys: [...]` |
+| `endpoint.deleted` | `delete_endpoint/2` | `db_pending: true`, `error_keys: [...]` |
+| `endpoint.enabled` / `endpoint.disabled` | `update_endpoint/3` with a flipped `enabled` field | n/a (toggle has its own guard) |
+| `prompt.created` | `create_prompt/2` | `db_pending: true`, `error_keys: [...]` |
+| `prompt.updated` | `update_prompt/3` (skipped on no-op `changeset.changes == %{}`) | `db_pending: true`, `error_keys: [...]` |
+| `prompt.deleted` | `delete_prompt/2` | `db_pending: true`, `error_keys: [...]` |
+| `prompt.enabled` / `prompt.disabled` | `update_prompt/3` with a flipped `enabled` field | n/a |
+
+Failure-branch logging is wired via `log_failed_endpoint_mutation/3` and `log_failed_prompt_mutation/3` pipe-step helpers — they no-op on `{:ok, _}` and write a `db_pending: true` audit row with PII-safe metadata (`error_keys` is the list of failed validation key NAMES, never the rejected values).
 
 Individual AI completion requests are **not** logged to Activity; they already have dedicated rows in `phoenix_kit_ai_requests` for usage tracking.
 
@@ -142,8 +151,11 @@ Application env (not Settings table):
 
 | Key | Default | Purpose |
 |-----|---------|---------|
+| `config :phoenix_kit_ai, :capture_request_content` | `true` | Persist user message + assistant response content in request `metadata` JSONB. Default preserves the shipped debugging shape; deployments with PII / data-retention obligations can set to `false`, which writes `metadata.content_redacted: true` in place of `messages` / `response` / `request_payload`. Token counts, latency, model, and cost are still recorded. |
 | `config :phoenix_kit_ai, :capture_request_memory` | `false` | Opt-in `:memory` capture per request. Keep off unless actively debugging memory issues; every request otherwise carries the memory snapshot in its JSONB metadata. |
-| `config :phoenix_kit_ai, :embedding_models` | `[]` | User-contributed embedding models appended to the built-in list in `OpenRouterClient.fetch_embedding_models/2`. |
+| `config :phoenix_kit_ai, :allow_internal_endpoint_urls` | `false` | Bypass the SSRF guard on `Endpoint.base_url` (which rejects loopback / RFC1918 / link-local / `*.local` / non-http(s)). Required for self-hosted Ollama / intranet inference; off in production by default. |
+| `config :phoenix_kit_ai, :embedding_models` | `[]` | User-contributed embedding models appended to the built-in list in `OpenRouterClient.fetch_embedding_models/2`. Non-list values log a warning and are ignored. |
+| `config :phoenix_kit_ai, :req_options` | `[]` | Optional `Req` opts appended to every HTTP call site (`OpenRouterClient.http_get/2`, `Completion.http_post/3`). Used by tests to route HTTP through `Req.Test` plug stubs (`plug: {Req.Test, MyStub}`); production default is `[]`, behaviour unchanged. |
 
 ### File Layout
 
@@ -217,7 +229,7 @@ Tables owned by this module:
 
 ## Migrating from legacy `endpoint.api_key`
 
-Endpoints created before the Integrations migration (PR #3) stored the OpenRouter API key directly in the `api_key` column. New endpoints leave that column blank and point `provider` at a `PhoenixKit.Integrations` connection key (e.g. `"openrouter"` or `"openrouter:my-key"`).
+Endpoints created before the Integrations migration (PR #3) stored the OpenRouter API key directly in the `api_key` column. The recommended approach for new endpoints is to point `provider` at a `PhoenixKit.Integrations` connection key (e.g. `"openrouter"` or `"openrouter:my-key"`); `OpenRouterClient.resolve_api_key/2` then reads the key from the Integrations store. The legacy `api_key` column is retained as a fallback safety net (and is currently `NOT NULL` in core's V34 migration, so a value must still be provided until a future major version drops the column).
 
 When `OpenRouterClient.resolve_api_key/2` has to fall back to the legacy column, it logs a `Logger.warning` identifying the endpoint by name + UUID so the noise is actionable. To clear it for a given endpoint:
 
@@ -280,12 +292,22 @@ mix test test/phoenix_kit_ai/web/               # LiveView tests
 
 Two levels of tests:
 
-1. **Unit tests** (`test/phoenix_kit_ai/{completion,errors,prompt,ai_model}_test.exs`) — Pure logic, no DB required, always run.
-2. **Integration tests** (`test/phoenix_kit_ai/{endpoint,request,openrouter_client}_test.exs`, LiveView tests) — Real PostgreSQL via Ecto sandbox; auto-excluded when the DB is unavailable.
+1. **Unit tests** — Pure logic, no DB required, always run. Examples: `errors_test.exs`, `prompt_test.exs` (extract/render helpers), `completion_test.exs` (HTTP error parsers).
+2. **Integration tests** — Real PostgreSQL via Ecto sandbox; auto-excluded when the DB is unavailable. Tests using `PhoenixKitAI.DataCase` or `PhoenixKitAI.LiveCase` are **automatically tagged `:integration`**. Examples: `endpoint_test.exs`, `request_test.exs`, `openrouter_client_coverage_test.exs`, `activity_logging_test.exs`, `legacy_api_key_migration_test.exs`, all `web/*_test.exs` files.
 
-The test DB (`phoenix_kit_ai_test`) uses an embedded `PhoenixKitAI.Test.Repo` in `test/support/test_repo.ex`. Schema setup happens in `test/test_helper.exs` by running core's versioned migrations directly (`Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, all: true, log: false)`) — same call the host app makes in production. No module-owned DDL anywhere. Tests using `PhoenixKitAI.DataCase` are **automatically tagged `:integration`** and excluded when the DB is unavailable.
+The test DB (`phoenix_kit_ai_test`) uses an embedded `PhoenixKitAI.Test.Repo` in `test/support/test_repo.ex`. Schema setup happens in `test/test_helper.exs` by running core's versioned migrations directly (`Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, all: true, log: false)`) — same call the host app makes in production. No module-owned DDL anywhere.
 
-LiveView tests need a minimal test Endpoint + Router + Layouts + LiveCase — see `test/support/`. The router scopes at `/en/admin/ai/…` so admin paths receive the default locale. `lazy_html` is a `:test`-only dep for rendered-HTML assertions.
+LiveView tests need a minimal test Endpoint + Router + Layouts + LiveCase — see `test/support/`:
+
+- `test/support/test_endpoint.ex`, `test_router.ex`, `test_layouts.ex` — minimal Phoenix endpoint/router/layout stack for `Phoenix.LiveViewTest.live/2`
+- `test/support/live_case.ex` — `PhoenixKitAI.LiveCase` with `fixture_endpoint/1`, `fixture_prompt/1`, `seed_openrouter_connection/2`, `fake_scope/1`, `put_test_scope/2`
+- `test/support/data_case.ex` — `PhoenixKitAI.DataCase` (`:integration` auto-tag, sandbox setup)
+- `test/support/hooks.ex` — `:assign_scope` `on_mount` hook so tests can inject a `phoenix_kit_current_scope` / `phoenix_kit_current_user` via session
+- `test/support/activity_log_assertions.ex` — `assert_activity_logged/2` / `refute_activity_logged/2` querying `phoenix_kit_activities` directly
+
+The router scopes at `/en/admin/ai/…` so admin paths receive the default locale. `lazy_html` is a `:test`-only dep for rendered-HTML assertions.
+
+Destructive rescue tests (DROP-TABLE-in-sandbox to exercise rescue branches) live in `test/phoenix_kit_ai/destructive_rescue_test.exs` (`async: false`). They use `:integration` like every other DB-bound test; the LV-mounted save_endpoint rescue test is additionally tagged `:destructive` and is opt-in via `--include destructive` because it mounts a LiveView and drops a table mid-handler.
 
 ### Version compliance test
 
