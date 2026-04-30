@@ -87,6 +87,7 @@ defmodule PhoenixKitAI.Endpoint do
              :uuid,
              :name,
              :description,
+             :integration_uuid,
              :provider,
              :base_url,
              :provider_settings,
@@ -120,6 +121,20 @@ defmodule PhoenixKitAI.Endpoint do
     field(:description, :string)
 
     # Provider configuration
+    #
+    # `integration_uuid` references a `phoenix_kit_settings` row (the
+    # actual integration connection the user picked). `OpenRouterClient`
+    # resolves credentials by uuid, so renaming the integration on the
+    # admin side doesn't break this endpoint.
+    #
+    # `provider` and `api_key` are legacy. `provider` carried either a
+    # provider-type tag (`"openrouter"`) or, more recently, an integration
+    # uuid stuffed into a string column. Both are now subsumed by
+    # `integration_uuid`. They remain on the schema for the transition
+    # window — the V107 migration backfilled `integration_uuid` from
+    # `provider`, and the legacy api_key column has its own warning path
+    # — but new code paths should ignore them.
+    field(:integration_uuid, :binary_id)
     field(:provider, :string, default: "openrouter")
     field(:api_key, :string)
     field(:base_url, :string)
@@ -173,6 +188,7 @@ defmodule PhoenixKitAI.Endpoint do
     |> cast(attrs, [
       :name,
       :description,
+      :integration_uuid,
       :provider,
       :api_key,
       :base_url,

@@ -203,11 +203,17 @@ defmodule PhoenixKitAI.Web.EndpointForm do
         changeset = AI.change_endpoint(endpoint)
         connections = socket.assigns.openrouter_connections
 
-        # Only treat the saved provider as the active connection if it matches
-        # an existing integration UUID. Otherwise leave it nil so the picker
-        # shows either the available connections or the empty state.
+        # Resolve the picker's `active_connection` from the endpoint's
+        # `integration_uuid`. Fall back to the legacy `provider` field
+        # (which carried the uuid before the dedicated column existed)
+        # so endpoints that pre-date V107's backfill still light up the
+        # right picker entry.
         active =
           cond do
+            endpoint.integration_uuid &&
+                Enum.any?(connections, &(&1.uuid == endpoint.integration_uuid)) ->
+              endpoint.integration_uuid
+
             endpoint.provider && Enum.any?(connections, &(&1.uuid == endpoint.provider)) ->
               endpoint.provider
 
@@ -416,8 +422,8 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @impl true
   def handle_event("select_openrouter_connection", %{"uuid" => uuid}, socket) do
-    # Store the integration UUID in the endpoint's provider field
-    updated_params = Map.put(socket.assigns.form.params, "provider", uuid)
+    # Pin the endpoint to the chosen integration row by uuid.
+    updated_params = Map.put(socket.assigns.form.params, "integration_uuid", uuid)
     form = %{socket.assigns.form | params: updated_params}
 
     connected = Integrations.connected?(uuid)
@@ -447,10 +453,12 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
     params = Map.put(params, "provider_settings", provider_settings)
 
-    # Use the active connection UUID as the provider (from integration picker)
+    # Pin to the chosen integration via its uuid. The legacy `provider`
+    # column stays at whatever it was (defaults to "openrouter") — not
+    # used for resolution anymore, just kept until the column is dropped.
     params =
       if socket.assigns[:active_connection] do
-        Map.put(params, "provider", socket.assigns.active_connection)
+        Map.put(params, "integration_uuid", socket.assigns.active_connection)
       else
         params
       end

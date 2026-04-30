@@ -360,13 +360,14 @@ defmodule PhoenixKitAI.OpenRouterClient do
   @doc """
   Builds headers from an Endpoint struct's provider_settings.
 
-  Resolves the API key from `PhoenixKit.Integrations` using the endpoint's
-  provider field, falling back to the endpoint's own api_key if present (legacy).
+  Resolves the API key by uuid lookup against `PhoenixKit.Integrations`,
+  falling back to the legacy `endpoint.api_key` column when the
+  integration row is missing or has no key.
   """
-  def build_headers_from_endpoint(%{provider: provider, provider_settings: settings} = endpoint) do
+  def build_headers_from_endpoint(%{provider_settings: settings} = endpoint) do
     settings = settings || %{}
 
-    api_key = resolve_api_key(provider, endpoint)
+    api_key = resolve_api_key(endpoint)
 
     opts =
       []
@@ -376,9 +377,15 @@ defmodule PhoenixKitAI.OpenRouterClient do
     build_headers(api_key, opts)
   end
 
-  defp resolve_api_key(provider, endpoint) do
-    # provider is the endpoint's provider field, e.g. "openrouter" or "openrouter:my-key"
-    case PhoenixKit.Integrations.get_credentials(provider) do
+  defp resolve_api_key(endpoint) do
+    # Prefer the explicit `integration_uuid` reference. Fall back to the
+    # legacy `provider` field (which carried a uuid before the dedicated
+    # column existed) for any endpoint that wasn't reached by V107's
+    # backfill. Final fallback is the deprecated `endpoint.api_key`
+    # column with a per-endpoint warning log.
+    candidate_uuid = endpoint.integration_uuid || endpoint.provider
+
+    case maybe_get_credentials(candidate_uuid) do
       {:ok, %{"api_key" => key}} when is_binary(key) and key != "" ->
         key
 
@@ -386,6 +393,13 @@ defmodule PhoenixKitAI.OpenRouterClient do
         warn_legacy_api_key(endpoint)
         endpoint.api_key
     end
+  end
+
+  defp maybe_get_credentials(nil), do: {:error, :not_configured}
+  defp maybe_get_credentials(""), do: {:error, :not_configured}
+
+  defp maybe_get_credentials(key) when is_binary(key) do
+    PhoenixKit.Integrations.get_credentials(key)
   end
 
   # Warn at most once per endpoint per VM. The legacy fallback path runs
