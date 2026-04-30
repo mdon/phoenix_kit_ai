@@ -93,6 +93,16 @@ repo_available =
       ON phoenix_kit_ai_endpoints (integration_uuid)
       """)
 
+      # Same forward-compat shim for V107's UNIQUE index on `lower(name)`.
+      # `Endpoint.changeset/2`'s `unique_constraint(:name)` was dead
+      # code until V107 added the index; until V107 ships in Hex we
+      # mirror it here so the unique-constraint test exercises the
+      # real production behavior.
+      TestRepo.query!("""
+      CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_ai_endpoints_name_index
+      ON phoenix_kit_ai_endpoints (lower(name))
+      """)
+
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true
     rescue

@@ -215,21 +215,25 @@ defmodule PhoenixKitAI.EndpointTest do
       assert endpoint.temperature == 0.7
     end
 
-    @tag :skip
     test "rejects duplicate names with a changeset error" do
-      # SURFACED BY MIGRATION CLEANUP (2026-04-29): production schema
-      # has no unique index on `phoenix_kit_ai_endpoints.name`, so the
-      # `unique_constraint(:name)` registered in `Endpoint.changeset/2`
-      # is dead code — duplicate names are silently accepted. The
-      # hand-rolled test migration was secretly creating the index,
-      # masking this in tests.
-      #
-      # Real fix: add the index to core's V34 (or a new V-numbered
-      # migration). Until then this test is skipped — surfaced to
-      # Max as a separate core-side concern.
+      # Core V107 added the missing UNIQUE index on `lower(name)` —
+      # `Endpoint.changeset/2`'s long-standing `unique_constraint(:name)`
+      # declaration is now load-bearing. Same name (case-insensitive)
+      # gets rejected as a clean changeset error instead of raising
+      # `Ecto.ConstraintError` or silently coexisting.
       attrs = %{name: "Dup", provider: "openrouter", model: "a/b", api_key: "sk-test-key"}
       {:ok, _first} = PhoenixKitAI.create_endpoint(attrs)
       {:error, changeset} = PhoenixKitAI.create_endpoint(attrs)
+
+      assert errors_on(changeset)[:name]
+    end
+
+    test "name uniqueness is case-insensitive" do
+      attrs1 = %{name: "Claude", provider: "openrouter", model: "a/b", api_key: "k1"}
+      attrs2 = %{name: "claude", provider: "openrouter", model: "a/b", api_key: "k2"}
+
+      {:ok, _first} = PhoenixKitAI.create_endpoint(attrs1)
+      {:error, changeset} = PhoenixKitAI.create_endpoint(attrs2)
 
       assert errors_on(changeset)[:name]
     end
