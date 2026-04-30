@@ -1,4 +1,6 @@
 defmodule PhoenixKitAI.OpenRouterClient do
+  import Ecto.Query, only: [from: 2]
+
   @moduledoc """
   OpenRouter API client for PhoenixKit AI system.
 
@@ -383,10 +385,23 @@ defmodule PhoenixKitAI.OpenRouterClient do
     # column existed) for any endpoint that wasn't reached by V107's
     # backfill. Final fallback is the deprecated `endpoint.api_key`
     # column with a per-endpoint warning log.
-    candidate_uuid = endpoint.integration_uuid || endpoint.provider
-
-    case maybe_get_credentials(candidate_uuid) do
+    case maybe_get_credentials(endpoint.integration_uuid) do
       {:ok, %{"api_key" => key}} when is_binary(key) and key != "" ->
+        key
+
+      _ ->
+        resolve_via_legacy_provider(endpoint)
+    end
+  end
+
+  defp resolve_via_legacy_provider(endpoint) do
+    case maybe_get_credentials(endpoint.provider) do
+      {:ok, %{"api_key" => key}} = result when is_binary(key) and key != "" ->
+        # Legacy path resolved — promote the resolved uuid to
+        # `endpoint.integration_uuid` so future requests take the
+        # clean uuid path. Best-effort; failure here doesn't block
+        # the request.
+        maybe_promote_legacy_provider(endpoint, result)
         key
 
       _ ->
@@ -400,6 +415,100 @@ defmodule PhoenixKitAI.OpenRouterClient do
 
   defp maybe_get_credentials(key) when is_binary(key) do
     PhoenixKit.Integrations.get_credentials(key)
+  end
+
+  # Lazy on-read promotion: when integration_uuid is nil but the
+  # legacy `provider` resolves to credentials, write the resolved
+  # uuid back to the endpoint so the next call takes the direct path.
+  # Safe to fail silently — the request that triggered this still
+  # got its api_key from the legacy path.
+  defp maybe_promote_legacy_provider(%{integration_uuid: nil} = endpoint, _resolved) do
+    integration_uuid = lookup_uuid_for_provider(endpoint.provider)
+
+    if is_binary(integration_uuid) do
+      try do
+        repo = PhoenixKit.RepoHelper.repo()
+
+        {count, _} =
+          from(e in PhoenixKitAI.Endpoint,
+            where: e.uuid == ^endpoint.uuid and is_nil(e.integration_uuid)
+          )
+          |> repo.update_all(
+            set: [
+              integration_uuid: integration_uuid,
+              updated_at: DateTime.utc_now()
+            ]
+          )
+
+        if count > 0 do
+          log_lazy_promotion(endpoint, integration_uuid)
+        end
+      rescue
+        _ -> :ok
+      catch
+        :exit, _ -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp maybe_promote_legacy_provider(_endpoint, _resolved), do: :ok
+
+  defp lookup_uuid_for_provider(provider) when is_binary(provider) do
+    cond do
+      Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, provider) ->
+        # Provider is already a uuid string — verify the row exists.
+        case PhoenixKit.Integrations.get_integration(provider) do
+          {:ok, _} -> provider
+          _ -> nil
+        end
+
+      true ->
+        # `provider:name` shape — split and scan the provider's
+        # connections. Uses `list_connections/1` (long-stable API)
+        # rather than `find_uuid_by_provider_name/1` so the lazy
+        # promotion works against phoenix_kit versions that predate
+        # that helper.
+        case String.split(provider, ":", parts: 2) do
+          [base, name] when name != "" ->
+            PhoenixKit.Integrations.list_connections(base)
+            |> Enum.find(fn conn -> conn.name == name end)
+            |> case do
+              %{uuid: uuid} -> uuid
+              _ -> nil
+            end
+
+          _ ->
+            nil
+        end
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp lookup_uuid_for_provider(_), do: nil
+
+  defp log_lazy_promotion(endpoint, integration_uuid) do
+    if Code.ensure_loaded?(PhoenixKit.Activity) do
+      PhoenixKit.Activity.log(%{
+        action: "integration.legacy_migrated",
+        module: "ai",
+        mode: "auto",
+        resource_type: "endpoint",
+        resource_uuid: endpoint.uuid,
+        metadata: %{
+          "migration_kind" => "reference_migrated",
+          "source" => "lazy_on_read",
+          "integration_uuid" => integration_uuid,
+          "actor_role" => "system"
+        }
+      })
+    end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   # Warn at most once per endpoint per VM. The legacy fallback path runs

@@ -283,5 +283,81 @@ defmodule PhoenixKitAI.LegacyApiKeyMigrationTest do
 
       assert :ok = PhoenixKitAI.run_legacy_api_key_migration()
     end
+
+    test "credentials migration also populates integration_uuid" do
+      ep = legacy_endpoint_fixture("sk-uuid-stamped")
+
+      assert :ok = PhoenixKitAI.run_legacy_api_key_migration()
+
+      reloaded = PhoenixKitAI.get_endpoint!(ep.uuid)
+      assert reloaded.provider == "openrouter:default"
+      assert is_binary(reloaded.integration_uuid)
+
+      # The stamped uuid points at the new integration row.
+      [%{uuid: integration_uuid}] = Integrations.list_connections("openrouter")
+      assert reloaded.integration_uuid == integration_uuid
+    end
+  end
+
+  describe "migrate_legacy/0 — combined entry point" do
+    test "returns {:ok, summary} with both migration kinds reported" do
+      # Empty state — nothing to migrate. The contract is that BOTH
+      # passes are attempted and the summary shape includes both.
+      {:ok, summary} = PhoenixKitAI.migrate_legacy()
+
+      assert is_map(summary)
+      assert Map.has_key?(summary, :credentials_migration)
+      assert Map.has_key?(summary, :reference_migration)
+    end
+
+    test "credentials migration pass runs as part of migrate_legacy/0" do
+      # Bare-provider endpoint with an api_key — the credentials
+      # migration target. After migrate_legacy/0 it should be pinned
+      # via integration_uuid (NOT just provider) — same shape the
+      # standalone run_legacy_api_key_migration/0 produces.
+      ep = legacy_endpoint_fixture("sk-via-combined")
+
+      {:ok, _summary} = PhoenixKitAI.migrate_legacy()
+
+      reloaded = PhoenixKitAI.get_endpoint!(ep.uuid)
+      assert reloaded.provider == "openrouter:default"
+      assert is_binary(reloaded.integration_uuid)
+    end
+
+    test "reference sweep pass promotes provider:name → integration_uuid" do
+      # Pre-stage: a manual integration row exists (operator set it
+      # up themselves, so the credentials-migration guard fires and
+      # skips that pass — but the reference sweep should still
+      # promote the string-referenced endpoint).
+      {:ok, _} = Integrations.add_connection("openrouter", "manual")
+      [%{uuid: manual_uuid}] = Integrations.list_connections("openrouter")
+
+      ep =
+        legacy_endpoint_fixture("ignored-key", %{
+          name: "StringRefEndpoint",
+          provider: "openrouter:manual"
+        })
+
+      # Reset integration_uuid to nil so the sweep has work to do.
+      SQL.query!(
+        TestRepo,
+        "UPDATE phoenix_kit_ai_endpoints SET integration_uuid = NULL WHERE uuid = $1",
+        [Ecto.UUID.dump!(ep.uuid)]
+      )
+
+      {:ok, _summary} = PhoenixKitAI.migrate_legacy()
+
+      reloaded = PhoenixKitAI.get_endpoint!(ep.uuid)
+      assert reloaded.integration_uuid == manual_uuid
+    end
+
+    test "returns either {:ok, _} or {:error, _} on infrastructure failure" do
+      # Drop the endpoints table so both passes fail. The function
+      # MUST NOT raise — orchestrator can't recover from a raised exception.
+      SQL.query!(TestRepo, "DROP TABLE phoenix_kit_ai_endpoints CASCADE")
+
+      result = PhoenixKitAI.migrate_legacy()
+      assert match?({:ok, _}, result) or match?({:error, _}, result)
+    end
   end
 end

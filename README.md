@@ -248,24 +248,30 @@ credentials and the legacy fallback stops firing.
 
 ### Boot-time auto-migrator
 
-`PhoenixKitAI.run_legacy_api_key_migration/0` is a one-shot auto-migrator
-mirroring the pattern of `PhoenixKit.Integrations.run_legacy_migrations/0`.
-Call it from your host app's `Application.start/2` to fold pre-Integrations
-endpoints automatically:
+The recommended entry point is the orchestrator
+`PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0`. Call it once from
+your host app's `Application.start/2`; it walks every registered
+PhoenixKit module and invokes its `migrate_legacy/0` callback (idempotent
+per module, never crashes the boot):
 
 ```elixir
 def start(_type, _args) do
   children = [...]
   result = Supervisor.start_link(children, opts)
 
-  # One-shot migrations — safe to call every boot. Idempotent via multiple
-  # guards; never crashes the boot if it fails.
-  PhoenixKit.Integrations.run_legacy_migrations()
-  PhoenixKitAI.run_legacy_api_key_migration()
+  # One call. Walks all modules. Per-module errors caught + logged.
+  PhoenixKit.ModuleRegistry.run_all_legacy_migrations()
 
   result
 end
 ```
+
+For AI specifically, `PhoenixKitAI.migrate_legacy/0` (the callback)
+runs both kinds of legacy data migration: the api_key→Integrations
+credentials migration AND the provider-string→integration_uuid reference
+sweep. Both emit `PhoenixKit.Activity` entries (`action:
+"integration.legacy_migrated"`) with PII-safe metadata so operators can
+audit migrations from the activity feed.
 
 Behaviour:
 

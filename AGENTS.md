@@ -12,7 +12,7 @@ The omissions below are deliberate so consumers and future contributors don't ex
 
 - **No DB migrations of its own** — every table this module owns (`phoenix_kit_ai_endpoints`, `phoenix_kit_ai_prompts`, `phoenix_kit_ai_requests`) is created by versioned migrations in core `phoenix_kit` (V40+ for `uuid_generate_v7()`, V57+ for the AI tables). Adding a column is a core migration first, then schema + changeset edits here.
 - **No per-completion activity logging** — `PhoenixKit.Activity.log/1` is invoked only on endpoint/prompt CRUD + enable/disable toggles. Per-request usage already lives in `phoenix_kit_ai_requests` with token/cost/latency columns; mirroring it into `phoenix_kit_activities` would double-write the same audit trail.
-- **No forced data migration for legacy `endpoint.api_key`** — `OpenRouterClient.resolve_api_key/2` keeps pre-Integrations endpoints working via fallback to the legacy column with a per-call `Logger.warning`. Operators can migrate at their own pace through the UI, OR opt in to the auto-migrator `PhoenixKitAI.run_legacy_api_key_migration/0` (call from host-app `Application.start/2`) which folds bare-`provider="openrouter"` endpoints into named `Integrations` connections at boot. See "Migrating from legacy `endpoint.api_key`" below.
+- **No forced data migration for legacy `endpoint.api_key`** — `OpenRouterClient.resolve_api_key/1` keeps pre-Integrations endpoints working via fallback to the legacy column with a per-call `Logger.warning`. Operators can migrate at their own pace through the UI, OR opt in to the orchestrated migrators by calling `PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0` from `Application.start/2`. The orchestrator invokes `migrate_legacy/0` on every registered module — for AI that runs both the api_key→Integration credentials migration AND the provider-string→integration_uuid reference sweep, with activity-log emissions per migrated record. See "Migrating from legacy `endpoint.api_key`" below.
 - **No public HTTP / API surface** — AI is admin-only. No JSON endpoints, no webhook receivers, no socket forwards. Consumers wire AI completions into their own host code via the `PhoenixKitAI` context module.
 - **No background jobs (Oban)** — completions run synchronously from the calling LiveView (`Playground.handle_info(:do_send, …)`) so the user sees the response inline. Long-running batch generation belongs in the consumer app, not here.
 - **No streaming responses** — `Completion` returns the full `{:ok, response}` shape; OpenRouter's SSE streaming endpoint isn't surfaced. The Playground UI is request/response, not chat-stream.
@@ -270,31 +270,39 @@ version.
 
 ### Auto-migrating at host-app boot
 
-`PhoenixKitAI.run_legacy_api_key_migration/0` is a one-shot auto-migrator that folds pre-Integrations endpoint api_keys into named `PhoenixKit.Integrations` connections. Mirrors the pattern of `PhoenixKit.Integrations.run_legacy_migrations/0` — call it once from your host app's `Application.start/2` to migrate without operator intervention:
+The recommended boot-time entry point is the orchestrator:
 
 ```elixir
 # In your host app's Application.start/2, after the Repo + supervisor children
 def start(_type, _args) do
   children = [...]
-
   result = Supervisor.start_link(children, opts)
 
-  # One-shot migrations — safe to call every boot. Idempotent via
-  # multiple guards; never crashes the boot if it fails.
-  PhoenixKit.Integrations.run_legacy_migrations()
-  PhoenixKitAI.run_legacy_api_key_migration()
+  # Walks every registered PhoenixKit.Module and calls its
+  # `migrate_legacy/0` callback. Idempotent — safe every boot.
+  # Per-module errors are caught + logged; never crashes boot.
+  PhoenixKit.ModuleRegistry.run_all_legacy_migrations()
 
   result
 end
 ```
 
-What the migration does:
+For AI specifically, `PhoenixKitAI.migrate_legacy/0` is the callback. It runs both kinds of legacy data migration AI may need:
+
+1. **Credentials migration** (`run_legacy_api_key_migration/0` underneath) — folds pre-Integrations endpoints' api_keys into named `PhoenixKit.Integrations` connections AND stamps `endpoint.integration_uuid` to point at the new row.
+2. **Reference sweep** (`provider`-string → `integration_uuid`) — endpoints whose `provider` field is already a `provider:name` reference (form-saves between PR #3 and V107, or new endpoints created against an older form) get their `integration_uuid` resolved and persisted.
+
+Both kinds emit `PhoenixKit.Activity` entries with `action: "integration.legacy_migrated"`, `mode: "auto"`, and PII-safe metadata (uuid, count, kind — never api_key values).
+
+Calling the underlying functions directly is still supported for ad-hoc operations, but the orchestrator is the single entry point that future-proofs against new modules adding their own `migrate_legacy/0` callbacks.
+
+What the credentials pass does:
 
 - Finds endpoints with `provider == "openrouter"` (the bare default — never named connections like `"openrouter:my-key"`) AND a non-empty `api_key`.
 - Groups them by api_key value (so endpoints sharing a key share one connection — dedup).
 - Creates a `PhoenixKit.Integrations` connection per distinct key. Naming: `"openrouter:default"` for single-key deployments; `"openrouter:imported-1"`, `"openrouter:imported-2"` for multi-key deployments.
-- Updates each endpoint's `provider` field to point at the new connection key.
-- **Never clears the legacy `api_key` column** — it stays as a safety-net fallback. `OpenRouterClient.resolve_api_key/2` prefers Integrations, so post-migration endpoints stop firing the legacy warning.
+- Updates each endpoint's `provider` AND `integration_uuid` fields to point at the new connection.
+- **Never clears the legacy `api_key` column** — it stays as a safety-net fallback. `OpenRouterClient.resolve_api_key/1` prefers Integrations, so post-migration endpoints stop firing the legacy warning.
 
 Idempotency guards (any one short-circuits):
 

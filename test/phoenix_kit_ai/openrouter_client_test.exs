@@ -227,4 +227,94 @@ defmodule PhoenixKitAI.OpenRouterClient.LegacyFallbackTest do
       assert log =~ "deprecated endpoint.api_key"
     end
   end
+
+  describe "lazy on-read promotion" do
+    # When an endpoint has integration_uuid=nil but its legacy provider
+    # field resolves through PhoenixKit.Integrations, the resolver
+    # should write the resolved uuid back to integration_uuid so
+    # future requests take the clean uuid path. Best-effort — errors
+    # don't block the request.
+
+    test "promotes integration_uuid when provider is a `provider:name` shape that resolves" do
+      # Pre-create an integration row.
+      :ok = PhoenixKit.Integrations.add_connection("openrouter", "lazy") |> elem(0)
+      {:ok, _} = PhoenixKit.Integrations.save_setup("openrouter:lazy", %{"api_key" => "sk-lazy"})
+      [%{uuid: integration_uuid}] =
+        PhoenixKit.Integrations.list_connections("openrouter")
+        |> Enum.filter(&(&1.name == "lazy"))
+
+      # Create a real endpoint pinned to that integration via the
+      # legacy `provider` string. integration_uuid stays NULL.
+      {:ok, endpoint} =
+        PhoenixKitAI.create_endpoint(%{
+          name: "LazyPromotion-#{System.unique_integer([:positive])}",
+          provider: "openrouter:lazy",
+          model: "anthropic/claude-3-haiku",
+          api_key: "sk-fixture-fallback"
+        })
+
+      # First call resolves via the legacy path AND writes back
+      # integration_uuid in the background. Reload the endpoint so
+      # the fixture's stale `endpoint.integration_uuid = nil` doesn't
+      # interfere — we want the resolver to see the saved row's value.
+      endpoint = PhoenixKitAI.get_endpoint!(endpoint.uuid)
+      headers = OpenRouterClient.build_headers_from_endpoint(endpoint)
+      assert {"Authorization", "Bearer sk-lazy"} in headers
+
+      # Endpoint reloaded from DB now has integration_uuid populated.
+      reloaded = PhoenixKitAI.get_endpoint!(endpoint.uuid)
+      assert reloaded.integration_uuid == integration_uuid
+    end
+
+    test "promotes integration_uuid when provider is a uuid string that resolves" do
+      :ok = PhoenixKit.Integrations.add_connection("openrouter", "uuid-direct") |> elem(0)
+      {:ok, _} = PhoenixKit.Integrations.save_setup("openrouter:uuid-direct", %{"api_key" => "sk-direct"})
+      [%{uuid: integration_uuid}] =
+        PhoenixKit.Integrations.list_connections("openrouter")
+        |> Enum.filter(&(&1.name == "uuid-direct"))
+
+      # Endpoint stuffed the uuid in the provider string column
+      # (pre-V107 form-save shape) instead of using integration_uuid.
+      {:ok, endpoint} =
+        PhoenixKitAI.create_endpoint(%{
+          name: "UuidInProvider-#{System.unique_integer([:positive])}",
+          provider: integration_uuid,
+          model: "a/b",
+          api_key: "sk-fixture-fallback"
+        })
+
+      OpenRouterClient.build_headers_from_endpoint(endpoint)
+
+      reloaded = PhoenixKitAI.get_endpoint!(endpoint.uuid)
+      assert reloaded.integration_uuid == integration_uuid
+    end
+
+    test "does NOT promote when integration_uuid is already set" do
+      :ok = PhoenixKit.Integrations.add_connection("openrouter", "no-promote") |> elem(0)
+      {:ok, _} =
+        PhoenixKit.Integrations.save_setup("openrouter:no-promote", %{"api_key" => "sk-noop"})
+
+      [%{uuid: integration_uuid}] =
+        PhoenixKit.Integrations.list_connections("openrouter")
+        |> Enum.filter(&(&1.name == "no-promote"))
+
+      {:ok, endpoint} =
+        PhoenixKitAI.create_endpoint(%{
+          name: "AlreadyPinned-#{System.unique_integer([:positive])}",
+          provider: "openrouter:no-promote",
+          integration_uuid: integration_uuid,
+          model: "a/b",
+          api_key: "sk-fixture-fallback"
+        })
+
+      original_updated_at = endpoint.updated_at
+
+      OpenRouterClient.build_headers_from_endpoint(endpoint)
+
+      reloaded = PhoenixKitAI.get_endpoint!(endpoint.uuid)
+      # No write happened — updated_at is unchanged.
+      assert reloaded.updated_at == original_updated_at
+      assert reloaded.integration_uuid == integration_uuid
+    end
+  end
 end

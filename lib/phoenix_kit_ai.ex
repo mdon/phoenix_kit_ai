@@ -552,9 +552,22 @@ defmodule PhoenixKitAI do
   defp legacy_connection_name(_total, index), do: "imported-#{index}"
 
   defp migrate_endpoint_group(name, api_key, endpoints) do
-    case PhoenixKit.Integrations.save_setup("openrouter:#{name}", %{"api_key" => api_key}) do
+    full_key = "openrouter:#{name}"
+
+    case PhoenixKit.Integrations.save_setup(full_key, %{"api_key" => api_key}) do
       {:ok, _saved} ->
-        update_endpoints_provider(endpoints, "openrouter:#{name}")
+        integration_uuid = lookup_integration_uuid("openrouter", name)
+        count = update_endpoints_provider(endpoints, full_key, integration_uuid)
+
+        if count > 0 and is_binary(integration_uuid) do
+          log_migration_activity(:credentials_migrated, %{
+            "endpoint_count" => count,
+            "integration_uuid" => integration_uuid,
+            "connection_name" => name
+          })
+        end
+
+        count
 
       {:error, _reason} ->
         require Logger
@@ -570,16 +583,44 @@ defmodule PhoenixKitAI do
     _ -> 0
   end
 
-  defp update_endpoints_provider(endpoints, new_provider) do
+  # Look up the just-created integration row's uuid by scanning
+  # `list_connections/1`. We could use the newer
+  # `Integrations.find_uuid_by_provider_name/1` primitive when
+  # available, but `list_connections/1` has been in core since the
+  # Integrations system shipped — works against any phoenix_kit
+  # version this module's deps allow.
+  defp lookup_integration_uuid(provider, name) do
+    PhoenixKit.Integrations.list_connections(provider)
+    |> Enum.find(fn conn -> conn.name == name end)
+    |> case do
+      %{uuid: uuid} -> uuid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp update_endpoints_provider(endpoints, new_provider, integration_uuid) do
     uuids = Enum.map(endpoints, & &1.uuid)
+
+    set_clause =
+      [provider: new_provider, updated_at: DateTime.utc_now()]
+      |> maybe_add_integration_uuid(integration_uuid)
 
     {count, _} =
       from(e in Endpoint, where: e.uuid in ^uuids)
-      |> repo().update_all(set: [provider: new_provider, updated_at: DateTime.utc_now()])
+      |> repo().update_all(set: set_clause)
 
     count
   rescue
     _ -> 0
+  end
+
+  defp maybe_add_integration_uuid(set_clause, nil), do: set_clause
+  defp maybe_add_integration_uuid(set_clause, ""), do: set_clause
+
+  defp maybe_add_integration_uuid(set_clause, uuid) when is_binary(uuid) do
+    Keyword.put(set_clause, :integration_uuid, uuid)
   end
 
   defp mark_legacy_api_key_migration_complete do
@@ -588,6 +629,177 @@ defmodule PhoenixKitAI do
       DateTime.utc_now() |> DateTime.to_iso8601(),
       module_key()
     )
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  # ===========================================
+  # Combined migrate_legacy/0 callback
+  # ===========================================
+
+  @doc """
+  Combined boot-time migration entry point.
+
+  Runs both legacy data transitions for AI:
+
+  1. **Local api_key → Integrations row + integration_uuid**
+     (delegates to `run_legacy_api_key_migration/0`). Endpoints with
+     bare `provider == "openrouter"` and a non-empty `api_key` get
+     grouped, get an Integration row created, and have both `provider`
+     AND `integration_uuid` updated to point at it.
+
+  2. **`provider`-string → `integration_uuid`** (sweep). Endpoints with
+     `integration_uuid IS NULL` whose `provider` field resolves to a
+     real integration uuid (either bare provider, `provider:name` shape,
+     or a uuid stuffed in the string column from pre-V107 form saves)
+     get their `integration_uuid` populated. V107's migration backfilled
+     most of these at install time; this pass catches stragglers
+     (e.g., endpoints created post-form-update but pre-V107).
+
+  Both kinds log to `PhoenixKit.Activity` per migrated record / group
+  with `mode: "auto"` and module `"ai"`. PII-safe: never logs
+  `api_key` values.
+
+  Idempotent — run on every host-app boot. Designed to be invoked via
+  the orchestrator (`PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0`),
+  but can be called directly for ad-hoc migration runs.
+  """
+  @impl PhoenixKit.Module
+  @spec migrate_legacy() :: {:ok, map()} | {:error, term()}
+  def migrate_legacy do
+    credentials_result = run_legacy_api_key_migration()
+    references_result = sweep_provider_string_to_integration_uuid()
+
+    {:ok,
+     %{
+       credentials_migration: credentials_result,
+       reference_migration: references_result
+     }}
+  rescue
+    e ->
+      require Logger
+
+      Logger.warning(
+        "[PhoenixKitAI] migrate_legacy/0 raised: #{Exception.message(e)}"
+      )
+
+      {:error, e}
+  end
+
+  defp sweep_provider_string_to_integration_uuid do
+    endpoints = list_endpoints_needing_uuid_promotion()
+
+    if Enum.empty?(endpoints) do
+      :nothing_to_migrate
+    else
+      migrated =
+        Enum.reduce(endpoints, 0, fn endpoint, acc ->
+          case promote_provider_to_integration_uuid(endpoint) do
+            :ok -> acc + 1
+            _ -> acc
+          end
+        end)
+
+      if migrated > 0 do
+        log_migration_activity(:reference_migrated, %{
+          "endpoint_count" => migrated,
+          "source" => "boot_sweep"
+        })
+      end
+
+      {:migrated, migrated}
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp list_endpoints_needing_uuid_promotion do
+    # Endpoints with NULL integration_uuid but a provider field that
+    # might resolve. Skip rows whose provider is the bare default
+    # ("openrouter") because credentials migration handles those when
+    # they have an api_key — and a bare provider with no api_key
+    # has nothing to promote to.
+    query =
+      from(e in Endpoint,
+        where:
+          is_nil(e.integration_uuid) and
+            not is_nil(e.provider) and
+            e.provider != "" and
+            e.provider != "openrouter",
+        select: %{uuid: e.uuid, provider: e.provider}
+      )
+
+    repo().all(query)
+  rescue
+    _ -> []
+  end
+
+  defp promote_provider_to_integration_uuid(%{uuid: endpoint_uuid, provider: provider}) do
+    integration_uuid = resolve_provider_to_uuid(provider)
+
+    cond do
+      is_nil(integration_uuid) ->
+        :no_match
+
+      true ->
+        {count, _} =
+          from(e in Endpoint, where: e.uuid == ^endpoint_uuid and is_nil(e.integration_uuid))
+          |> repo().update_all(
+            set: [integration_uuid: integration_uuid, updated_at: DateTime.utc_now()]
+          )
+
+        if count > 0, do: :ok, else: :no_op
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp resolve_provider_to_uuid(provider) when is_binary(provider) do
+    cond do
+      uuid_shape?(provider) ->
+        # Provider string IS already a uuid — verify the row exists.
+        case PhoenixKit.Integrations.get_integration(provider) do
+          {:ok, _} -> provider
+          _ -> nil
+        end
+
+      true ->
+        # `provider:name` shape — split and look up by scanning the
+        # provider's connections. Uses `list_connections/1` rather
+        # than `find_uuid_by_provider_name/1` so we work against
+        # phoenix_kit versions that predate that helper.
+        case String.split(provider, ":", parts: 2) do
+          [base, name] when name != "" ->
+            lookup_integration_uuid(base, name)
+
+          _ ->
+            nil
+        end
+    end
+  end
+
+  defp resolve_provider_to_uuid(_), do: nil
+
+  defp uuid_shape?(string) when is_binary(string) do
+    Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, string)
+  end
+
+  defp log_migration_activity(action_atom, metadata) do
+    if Code.ensure_loaded?(PhoenixKit.Activity) do
+      PhoenixKit.Activity.log(%{
+        action: "integration.legacy_migrated",
+        module: module_key(),
+        mode: "auto",
+        resource_type: "endpoint",
+        metadata:
+          Map.merge(metadata, %{
+            "migration_kind" => Atom.to_string(action_atom),
+            "actor_role" => "system"
+          })
+      })
+    end
 
     :ok
   rescue
