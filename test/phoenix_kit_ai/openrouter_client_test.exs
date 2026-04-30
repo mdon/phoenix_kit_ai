@@ -149,4 +149,82 @@ defmodule PhoenixKitAI.OpenRouterClient.LegacyFallbackTest do
       refute log =~ "deprecated endpoint.api_key"
     end
   end
+
+  describe "build_headers_from_endpoint/1 — integration_uuid resolution" do
+    # Post-V107, endpoints reference a specific integration row by
+    # uuid via `integration_uuid`. `resolve_api_key/1` should prefer
+    # that field over `provider` and the legacy `api_key` column.
+
+    setup do
+      # Seed an OpenRouter integration row, capture its uuid.
+      :ok = PhoenixKit.Integrations.add_connection("openrouter", "primary") |> elem(0)
+      {:ok, _} = PhoenixKit.Integrations.save_setup("openrouter:primary", %{"api_key" => "sk-uuid-resolved"})
+      [%{uuid: uuid}] = PhoenixKit.Integrations.list_connections("openrouter")
+      {:ok, integration_uuid: uuid}
+    end
+
+    test "uses integration_uuid first when set", %{integration_uuid: uuid} do
+      endpoint = %Endpoint{
+        uuid: "01234567-89ab-7def-8000-0000000000cc",
+        name: "Pinned Endpoint",
+        integration_uuid: uuid,
+        # Bare `provider` and a legacy `api_key` would both produce
+        # different keys; integration_uuid should win over both.
+        provider: "openrouter",
+        api_key: "sk-legacy-LOSER",
+        provider_settings: %{}
+      }
+
+      log =
+        capture_log(fn ->
+          headers = OpenRouterClient.build_headers_from_endpoint(endpoint)
+          assert {"Authorization", "Bearer sk-uuid-resolved"} in headers
+        end)
+
+      # No legacy warning fires — the uuid path resolved cleanly.
+      refute log =~ "deprecated endpoint.api_key"
+    end
+
+    test "falls back to legacy provider field when integration_uuid is nil", %{
+      integration_uuid: uuid
+    } do
+      endpoint = %Endpoint{
+        uuid: "01234567-89ab-7def-8000-0000000000dd",
+        name: "Provider-as-uuid Endpoint",
+        integration_uuid: nil,
+        # Pre-V107 endpoints stuffed the integration uuid into the
+        # `provider` string field. Resolver still accepts that shape.
+        provider: uuid,
+        api_key: "",
+        provider_settings: %{}
+      }
+
+      log =
+        capture_log(fn ->
+          headers = OpenRouterClient.build_headers_from_endpoint(endpoint)
+          assert {"Authorization", "Bearer sk-uuid-resolved"} in headers
+        end)
+
+      refute log =~ "deprecated endpoint.api_key"
+    end
+
+    test "warns + falls back to api_key when both integration_uuid and provider are unresolvable" do
+      endpoint = %Endpoint{
+        uuid: "01234567-89ab-7def-8000-0000000000ee",
+        name: "Orphan Endpoint",
+        integration_uuid: nil,
+        provider: "openrouter-not-registered-#{System.unique_integer([:positive])}",
+        api_key: "sk-fallback-key",
+        provider_settings: %{}
+      }
+
+      log =
+        capture_log(fn ->
+          headers = OpenRouterClient.build_headers_from_endpoint(endpoint)
+          assert {"Authorization", "Bearer sk-fallback-key"} in headers
+        end)
+
+      assert log =~ "deprecated endpoint.api_key"
+    end
+  end
 end

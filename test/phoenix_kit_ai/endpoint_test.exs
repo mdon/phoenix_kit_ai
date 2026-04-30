@@ -156,6 +156,49 @@ defmodule PhoenixKitAI.EndpointTest do
     end
   end
 
+  describe "changeset/2 — integration_uuid field" do
+    test "accepts integration_uuid alongside other fields" do
+      uuid = UUIDv7.generate()
+
+      changeset =
+        Endpoint.changeset(%Endpoint{}, %{
+          name: "Pinned",
+          integration_uuid: uuid,
+          provider: "openrouter",
+          model: "anthropic/claude-3-haiku",
+          api_key: ""
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :integration_uuid) == uuid
+    end
+
+    test "integration_uuid is optional (nullable for backwards compat)" do
+      # Existing endpoints created pre-V107 may have NULL
+      # `integration_uuid`. The changeset doesn't require it; the form
+      # should populate it via the picker, but a missing value is not
+      # a validation error.
+      changeset =
+        Endpoint.changeset(%Endpoint{}, %{
+          name: "Legacy",
+          provider: "openrouter",
+          model: "a/b",
+          api_key: "sk-test-key"
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :integration_uuid) == nil
+    end
+
+    test "is included in the JSON encoder allowlist" do
+      uuid = UUIDv7.generate()
+      endpoint = %Endpoint{name: "X", integration_uuid: uuid, provider: "openrouter"}
+      json = Jason.encode!(endpoint)
+      decoded = Jason.decode!(json)
+      assert decoded["integration_uuid"] == uuid
+    end
+  end
+
   describe "create_endpoint/2 (integration)" do
     test "inserts a row and returns the struct" do
       {:ok, endpoint} =

@@ -76,6 +76,23 @@ repo_available =
       # function; V57+ creates the AI tables. No module-owned DDL.
       Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, all: true, log: false)
 
+      # Forward-compat shim: PhoenixKit V107 adds
+      # `phoenix_kit_ai_endpoints.integration_uuid` so endpoints can
+      # pin to a specific integration row by uuid. Until that V107 is
+      # published as a Hex release, this `IF NOT EXISTS` step ensures
+      # the standalone AI test DB has the column whether the dep is
+      # at V96, V107, or later. Once V107 lands in Hex this becomes a
+      # silent no-op and can be removed.
+      TestRepo.query!("""
+      ALTER TABLE phoenix_kit_ai_endpoints
+      ADD COLUMN IF NOT EXISTS integration_uuid uuid
+      """)
+
+      TestRepo.query!("""
+      CREATE INDEX IF NOT EXISTS phoenix_kit_ai_endpoints_integration_uuid_index
+      ON phoenix_kit_ai_endpoints (integration_uuid)
+      """)
+
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true
     rescue

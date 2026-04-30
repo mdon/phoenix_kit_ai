@@ -169,13 +169,16 @@ PhoenixKitAI.list_endpoints(
 {:ok, _}       = PhoenixKitAI.delete_endpoint(endpoint)
 ```
 
-> **API keys are managed via Integrations.** Point `provider` at an
-> OpenRouter connection (default key `"openrouter"`); the API key is
-> resolved through `PhoenixKit.Integrations` at request time. The
-> legacy `api_key` column is retained as a fallback safety net (and is
-> currently `NOT NULL` in core's V34 — a value must still be provided
-> until a future major version drops the column). See [Migrating from
-> legacy `endpoint.api_key`](#migrating-from-legacy-endpointapi_key)
+> **API keys are managed via Integrations.** Each endpoint references a
+> specific `PhoenixKit.Integrations` connection by uuid via the
+> `integration_uuid` column (added in core's V107 with backfill from
+> existing `provider` strings). The picker on the endpoint form writes
+> the chosen connection's uuid; `OpenRouterClient.resolve_api_key/1`
+> looks up credentials by uuid at request time — no per-provider
+> guessing. The legacy `api_key` column is retained as a fallback
+> safety net (and is currently `NOT NULL` in core's V34 — a value must
+> still be provided until a future major version drops the column).
+> See [Migrating from legacy `endpoint.api_key`](#migrating-from-legacy-endpointapi_key)
 > for the recommended workflow and the boot-time auto-migrator.
 
 ## Source tracking & debugging
@@ -222,13 +225,18 @@ config :phoenix_kit_ai,
 
 ## Migrating from legacy `endpoint.api_key`
 
-Endpoints created before the Integrations migration stored the OpenRouter
-API key directly in the `api_key` column. The recommended workflow is to
-point `provider` at a `PhoenixKit.Integrations` connection key (e.g.
-`"openrouter"` or `"openrouter:my-name"`) so the API key flows through
-the centralised Integrations store; `OpenRouterClient.resolve_api_key/2`
-prefers Integrations and falls back to the legacy column with a
-deprecation warning per request.
+Endpoints created before V107 / the Integrations migration stored the
+OpenRouter API key directly in the `api_key` column and used the bare
+`provider` field (`"openrouter"`) without a specific connection
+reference. V107's backfill stamps `integration_uuid` for any endpoint
+whose `provider` matches a `PhoenixKit.Integrations` row. Endpoints
+that can't be auto-resolved keep working via the legacy `api_key`
+column with a deprecation warning per request.
+
+The recommended workflow is to point each endpoint at a specific
+integration connection via the form's `integration_picker`;
+`OpenRouterClient.resolve_api_key/1` then prefers the uuid-resolved
+credentials and the legacy fallback stops firing.
 
 ### Manual workflow (per-endpoint)
 
@@ -269,8 +277,8 @@ Behaviour:
 - Creates one Integrations connection per distinct key. Naming:
   `"openrouter:default"` for single-key deployments;
   `"openrouter:imported-1"` / `"imported-2"` / etc. for multi-key.
-- Updates each endpoint's `provider` field to point at the new
-  connection key.
+- Updates each endpoint's `integration_uuid` (and legacy `provider`
+  string) to point at the new connection.
 - **Never clears the legacy `api_key` column** — it stays as a
   safety-net fallback.
 

@@ -162,6 +162,60 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
     end
   end
 
+  describe "load_endpoint active_connection — integration_uuid path" do
+    # Post-V107, endpoints reference the chosen integration via the
+    # dedicated `integration_uuid` column. The picker should light up
+    # the matching connection regardless of whatever the legacy
+    # `provider` field still holds.
+
+    test "edit endpoint with integration_uuid set picks the matching connection",
+         %{conn: conn} do
+      %{uuid: uuid} =
+        seed_openrouter_connection("uuid-pinned-#{System.unique_integer([:positive])}")
+
+      endpoint = fixture_endpoint(integration_uuid: uuid, provider: "openrouter")
+
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
+
+      assert :sys.get_state(view.pid).socket.assigns.active_connection == uuid
+    end
+
+    test "integration_uuid wins over a stale provider value", %{conn: conn} do
+      %{uuid: real_uuid} =
+        seed_openrouter_connection("winner-#{System.unique_integer([:positive])}")
+
+      stale_provider = "01234567-89ab-7def-8000-0000000abcde"
+      endpoint = fixture_endpoint(integration_uuid: real_uuid, provider: stale_provider)
+
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
+
+      assert :sys.get_state(view.pid).socket.assigns.active_connection == real_uuid
+    end
+  end
+
+  describe "select_openrouter_connection event" do
+    # The picker dispatches this event with the chosen integration's
+    # uuid. The form should write it into `form.params` under
+    # `integration_uuid` (not `provider`) so save persists the new
+    # column. Pins the Phase 3a swap.
+
+    test "writes the picked uuid into form.params['integration_uuid']",
+         %{conn: conn} do
+      %{uuid: uuid} =
+        seed_openrouter_connection("pick-#{System.unique_integer([:positive])}")
+
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
+
+      view
+      |> element(~s(button[phx-click="select_openrouter_connection"][phx-value-uuid="#{uuid}"]))
+      |> render_click()
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.active_connection == uuid
+      assert assigns.form.params["integration_uuid"] == uuid
+    end
+  end
+
   describe "handle_info catch-all" do
     test "ignores unrelated PubSub messages without crashing", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")

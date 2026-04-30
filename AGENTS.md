@@ -227,17 +227,46 @@ Tables owned by this module:
 - `phoenix_kit_ai_prompts` — Prompt templates (UUIDv7 PK)
 - `phoenix_kit_ai_requests` — Request logs for usage tracking (UUIDv7 PK, FK to endpoints/prompts/users)
 
+## Pinning endpoints to a specific integration
+
+Each AI endpoint references a specific `PhoenixKit.Integrations`
+connection by uuid via the `integration_uuid` column (added in core's
+V107 with backfill from existing `provider` strings). The form's
+`integration_picker` writes the chosen connection's uuid into
+`integration_uuid` on save; `OpenRouterClient.resolve_api_key/1` looks
+up credentials by that uuid at request time — no guessing, no
+per-provider fallback.
+
+Renaming or re-validating the integration on the admin side doesn't
+break the endpoint's reference: uuids are stable across renames
+(`PhoenixKit.Integrations.rename_connection/4` updates the storage
+row's `key` column in place).
+
 ## Migrating from legacy `endpoint.api_key`
 
-Endpoints created before the Integrations migration (PR #3) stored the OpenRouter API key directly in the `api_key` column. The recommended approach for new endpoints is to point `provider` at a `PhoenixKit.Integrations` connection key (e.g. `"openrouter"` or `"openrouter:my-key"`); `OpenRouterClient.resolve_api_key/2` then reads the key from the Integrations store. The legacy `api_key` column is retained as a fallback safety net (and is currently `NOT NULL` in core's V34 migration, so a value must still be provided until a future major version drops the column).
+Endpoints created before V107 / PR #3 stored the OpenRouter API key
+directly in the `api_key` column and used the bare `provider` field
+(`"openrouter"`) without a specific connection reference. V107's
+backfill stamps `integration_uuid` for any endpoint whose `provider`
+matches a `PhoenixKit.Integrations` row (exact match for
+`"openrouter:my-key"` shapes, most-recently-validated row for bare
+`"openrouter"` strings). Endpoints with no resolvable integration get
+NULL — `resolve_api_key/1` falls back to the legacy `api_key` column
+and logs a `Logger.warning` identifying the endpoint by name + UUID.
 
-When `OpenRouterClient.resolve_api_key/2` has to fall back to the legacy column, it logs a `Logger.warning` identifying the endpoint by name + UUID so the noise is actionable. To clear it for a given endpoint:
+To clear the legacy warning for an endpoint:
 
-1. Open Settings → Integrations and add an OpenRouter connection (if one doesn't already exist). The default connection key is `openrouter`.
-2. Edit the endpoint in the AI admin UI and select that connection from the `integration_picker`. The `provider` field will be set to the connection's lookup key.
+1. Open Settings → Integrations and add an OpenRouter connection (if
+   one doesn't already exist).
+2. Edit the endpoint in the AI admin UI and select the connection
+   from the `integration_picker`. The form writes the connection's
+   uuid into `integration_uuid`.
 3. Save. The legacy warning stops firing on the next request.
 
-The `api_key` column is retained so pre-migration deployments keep working without forced downtime, and is flagged **Deprecated** in `PhoenixKitAI.Endpoint` — planned for removal in a future major version.
+The `api_key` column is retained so pre-migration deployments keep
+working without forced downtime, and is flagged **Deprecated** in
+`PhoenixKitAI.Endpoint` — planned for removal in a future major
+version.
 
 ### Auto-migrating at host-app boot
 
