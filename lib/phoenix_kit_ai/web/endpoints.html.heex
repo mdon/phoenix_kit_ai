@@ -129,6 +129,8 @@
                       >
                         {endpoint.name}
                       </.link>
+                      <% integration = Map.get(@integrations_by_uuid, endpoint.integration_uuid) %>
+                      <% integration_status = integration && integration.data["status"] %>
                       <.enabled_badge enabled={endpoint.enabled} />
                       <%!-- Integration health badge — orthogonal to
                            `enabled`. An endpoint can be enabled but
@@ -139,7 +141,7 @@
                            "Active" for endpoints that would 401 on
                            the next request.
 
-                           Three failure shapes:
+                           Failure shapes:
                            - integration_uuid set but doesn't resolve
                              → the integration was deleted ("Missing")
                            - integration_uuid resolves with status
@@ -147,27 +149,25 @@
                            - integration_uuid resolves but status is
                              not "connected" → never tested or
                              disconnected ("Not connected")
+                           - integration_uuid is nil → never picked
                            - status "connected" → no badge (the
                              enabled badge already conveys "ready") --%>
                       <%= cond do %>
-                        <% endpoint.integration_uuid &&
-                             not Map.has_key?(@connection_status, endpoint.integration_uuid) -> %>
+                        <% endpoint.integration_uuid && is_nil(integration) -> %>
                           <span
                             class="badge badge-error badge-sm"
                             title="The pinned integration was deleted. Edit the endpoint and select a new one."
                           >
                             Integration missing
                           </span>
-                        <% endpoint.integration_uuid &&
-                             Map.get(@connection_status, endpoint.integration_uuid) == "error" -> %>
+                        <% integration_status == "error" -> %>
                           <span
                             class="badge badge-error badge-sm"
                             title="The integration's last validation failed. Open it in Settings → Integrations to retest."
                           >
                             Integration error
                           </span>
-                        <% endpoint.integration_uuid &&
-                             Map.get(@connection_status, endpoint.integration_uuid) != "connected" -> %>
+                        <% integration && integration_status != "connected" -> %>
                           <span
                             class="badge badge-warning badge-sm"
                             title="The integration is not currently connected. Open it in Settings → Integrations to test."
@@ -184,6 +184,46 @@
                         <% true -> %>
                       <% end %>
                       <span class="badge badge-outline">{endpoint.provider}</span>
+                    </div>
+
+                    <%!-- Integration + masked API key row.
+
+                         Surfaces which integration the endpoint
+                         resolves through and a partial view of the
+                         credential it'd send. Useful at-a-glance for
+                         "is this endpoint pointing where I think
+                         it's pointing?" without opening the edit form.
+
+                         Mask format (`sk-or-v1…abcd`): first 8 + last
+                         4 characters. The OpenRouter prefix stays
+                         recognisable, the suffix differentiates keys
+                         that share a prefix, and the bulk of the
+                         secret is elided. For orphaned endpoints we
+                         show "Integration deleted" + "—" since the
+                         credential lives in the (now gone) integration
+                         row, not on the endpoint anymore. --%>
+                    <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-base-content/60">
+                      <div class="flex items-center gap-1">
+                        <.icon name="hero-link" class="w-3.5 h-3.5" />
+                        <span class="font-medium text-base-content/70">Integration:</span>
+                        <%= cond do %>
+                          <% integration -> %>
+                            <span>{integration.name}</span>
+                          <% endpoint.integration_uuid -> %>
+                            <span class="text-error">Deleted</span>
+                          <% true -> %>
+                            <span class="italic">none</span>
+                        <% end %>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <.icon name="hero-key" class="w-3.5 h-3.5" />
+                        <span class="font-medium text-base-content/70">Key:</span>
+                        <span class="font-mono">
+                          {if integration,
+                            do: PhoenixKitAI.Web.Endpoints.mask_api_key(integration.data["api_key"]),
+                            else: "—"}
+                        </span>
+                      </div>
                     </div>
 
                     <div class="mt-2 flex flex-wrap gap-4 text-sm text-base-content/70">

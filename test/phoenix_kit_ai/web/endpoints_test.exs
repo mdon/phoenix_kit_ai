@@ -76,6 +76,77 @@ defmodule PhoenixKitAI.Web.EndpointsTest do
       refute html =~ "Not connected"
       refute html =~ "No integration"
     end
+
+    test "card shows the integration name + masked api_key for healthy endpoints",
+         %{conn: conn} do
+      # The card's second row surfaces which integration the endpoint
+      # resolves through and a partial view of the credential — first
+      # 8 + last 4 characters joined by `…`. Identifies the OpenRouter
+      # prefix and the unique suffix without leaking the full key.
+      connection_name = "card-display-#{System.unique_integer([:positive])}"
+
+      %{uuid: integration_uuid} =
+        seed_openrouter_connection(
+          connection_name,
+          data: %{"api_key" => "sk-or-v1-abcdefghijklmnop", "status" => "connected"}
+        )
+
+      _endpoint =
+        fixture_endpoint(name: "Card Display", integration_uuid: integration_uuid)
+
+      {:ok, _view, html} = live(conn, "/en/admin/ai/endpoints")
+
+      # Integration name is shown verbatim.
+      assert html =~ connection_name
+      # Masked api_key — first 8 (`sk-or-v1`) + last 4 (`mnop`).
+      assert html =~ "sk-or-v1…mnop"
+      # The full key never reaches the rendered HTML.
+      refute html =~ "sk-or-v1-abcdefghijklmnop"
+    end
+
+    test "card shows 'Deleted' for orphaned endpoints",
+         %{conn: conn} do
+      orphaned_uuid = "01234567-89ab-7def-8000-000000010001"
+
+      _endpoint =
+        fixture_endpoint(name: "Orphan Card", integration_uuid: orphaned_uuid)
+
+      {:ok, _view, html} = live(conn, "/en/admin/ai/endpoints")
+
+      assert html =~ "Orphan Card"
+      assert html =~ "Deleted"
+    end
+
+    test "card shows 'none' when integration_uuid is nil",
+         %{conn: conn} do
+      _endpoint = fixture_endpoint(name: "Unwired Card", integration_uuid: nil)
+
+      {:ok, _view, html} = live(conn, "/en/admin/ai/endpoints")
+
+      assert html =~ "Unwired Card"
+      # The integration field falls back to "none" italics.
+      assert html =~ ~r/Integration:.*none/s
+    end
+  end
+
+  describe "mask_api_key/1" do
+    alias PhoenixKitAI.Web.Endpoints
+
+    test "masks a long key as first-8 + last-4 with an ellipsis" do
+      assert Endpoints.mask_api_key("sk-or-v1-abcdefghijklmnop") == "sk-or-v1…mnop"
+    end
+
+    test "fully masks short keys (under 14 chars) to avoid leaking most of the secret" do
+      assert Endpoints.mask_api_key("short") == "•••"
+      # 13 chars — still under the threshold.
+      assert Endpoints.mask_api_key("0123456789012") == "•••"
+    end
+
+    test "renders nil/empty/non-binary as a plain dash" do
+      assert Endpoints.mask_api_key(nil) == "—"
+      assert Endpoints.mask_api_key("") == "—"
+      assert Endpoints.mask_api_key(:atom) == "—"
+    end
   end
 
   describe "toggle_endpoint" do

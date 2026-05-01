@@ -61,7 +61,7 @@ defmodule PhoenixKitAI.Web.Endpoints do
       |> assign(:project_title, project_title)
       |> assign(:endpoints, [])
       |> assign(:endpoint_stats, %{})
-      |> assign(:connection_status, %{})
+      |> assign(:integrations_by_uuid, %{})
       |> assign(:has_endpoints, false)
       |> assign(:sort_by, :id)
       |> assign(:sort_dir, :asc)
@@ -494,20 +494,21 @@ defmodule PhoenixKitAI.Web.Endpoints do
 
     endpoint_stats = AI.get_endpoint_usage_stats()
 
-    # Map of integration_uuid → status for the current OpenRouter
-    # connections. Loaded once so per-endpoint badge rendering can
-    # tell connected / not-connected / orphaned-integration apart
-    # without an N+1 of `Integrations.connected?/1` calls. An
+    # Map of integration_uuid → connection (`%{name, data}`) for the
+    # current OpenRouter connections. Loaded once so per-endpoint
+    # rendering can pull both the health status AND the integration
+    # name + masked api_key without an N+1 of
+    # `Integrations.connected?/1` / `get_credentials/1` calls. An
     # endpoint whose `integration_uuid` is not a key in this map is
     # an orphan (the integration row was deleted).
-    connection_status =
+    integrations_by_uuid =
       PhoenixKit.Integrations.list_connections("openrouter")
-      |> Map.new(fn conn -> {conn.uuid, conn.data["status"]} end)
+      |> Map.new(fn conn -> {conn.uuid, conn} end)
 
     socket
     |> assign(:endpoints, endpoints)
     |> assign(:endpoint_stats, endpoint_stats)
-    |> assign(:connection_status, connection_status)
+    |> assign(:integrations_by_uuid, integrations_by_uuid)
     |> assign(:total_endpoints, total)
     |> assign(:has_endpoints, total > 0)
   end
@@ -616,6 +617,28 @@ defmodule PhoenixKitAI.Web.Endpoints do
   # Activity attribution — passed through to AI.update_endpoint/3 and
   # AI.delete_endpoint/2 so the mutation is logged against the right
   # actor. See PhoenixKitAI moduledoc for the activity logging pattern.
+  # Masks an api_key for display in the endpoint cards: shows the
+  # first 8 + last 4 characters. Picks an OpenRouter-style key
+  # apart cleanly (`sk-or-v1-…abcd`) — recognisable provider
+  # prefix retained, identifying suffix retained, middle elided.
+  # Short keys (< 14 chars) get fully masked so we don't accidentally
+  # expose most of the key.
+  @doc false
+  def mask_api_key(nil), do: "—"
+  def mask_api_key(""), do: "—"
+
+  def mask_api_key(key) when is_binary(key) do
+    if String.length(key) < 14 do
+      "•••"
+    else
+      head = String.slice(key, 0, 8)
+      tail = String.slice(key, -4..-1)
+      head <> "…" <> tail
+    end
+  end
+
+  def mask_api_key(_), do: "—"
+
   defp actor_opts(socket) do
     role = if admin?(socket), do: "admin", else: "user"
 
