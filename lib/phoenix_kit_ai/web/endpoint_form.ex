@@ -157,6 +157,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       |> assign(:provider_models, [])
       |> assign(:endpoint, nil)
       |> assign(:active_connection, nil)
+      |> assign(:selected_uuids, [])
       |> assign(:integration_connected, false)
       |> assign(:form, to_form(AI.change_endpoint(%Endpoint{})))
       |> assign(:page_title, "AI Endpoint")
@@ -182,6 +183,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       |> assign(:endpoint, nil)
       |> assign(:form, to_form(changeset))
       |> assign(:active_connection, active)
+      |> assign(:selected_uuids, if(active, do: [active], else: []))
       |> assign(:integration_connected, connected)
 
     if connected do
@@ -208,23 +210,48 @@ defmodule PhoenixKitAI.Web.EndpointForm do
         # (which carried the uuid before the dedicated column existed)
         # so endpoints that pre-date V107's backfill still light up the
         # right picker entry.
-        active =
+        #
+        # Orphan handling: when `integration_uuid` is set but doesn't
+        # match any current connection (the integration was deleted
+        # since this endpoint was wired up), keep `active = nil` so we
+        # don't silently auto-pick an unrelated single connection —
+        # that would mask the deletion. Capture the orphaned uuid in
+        # `orphaned_integration_uuid` so the picker can render its
+        # "Integration deleted" warning card via `selected_uuids` and
+        # the user picks a new integration explicitly.
+        {active, orphaned_integration_uuid} =
           cond do
             endpoint.integration_uuid &&
                 Enum.any?(connections, &(&1.uuid == endpoint.integration_uuid)) ->
-              endpoint.integration_uuid
+              {endpoint.integration_uuid, nil}
+
+            endpoint.integration_uuid ->
+              # Set but unresolvable — surface the orphan, no auto-pick.
+              {nil, endpoint.integration_uuid}
 
             endpoint.provider && Enum.any?(connections, &(&1.uuid == endpoint.provider)) ->
-              endpoint.provider
+              {endpoint.provider, nil}
 
             match?([_], connections) ->
-              hd(connections).uuid
+              {hd(connections).uuid, nil}
 
             true ->
-              nil
+              {nil, nil}
           end
 
         connected = active && Integrations.connected?(active)
+
+        # `selected_uuids` is what the picker renders as selected.
+        # When `active` resolves cleanly, it's just `[active]`. When
+        # the original integration is deleted, we pass the orphan uuid
+        # so the picker can render its "Integration deleted" warning
+        # alongside the other connection cards.
+        selected_uuids =
+          cond do
+            active -> [active]
+            orphaned_integration_uuid -> [orphaned_integration_uuid]
+            true -> []
+          end
 
         socket =
           socket
@@ -232,6 +259,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
           |> assign(:endpoint, endpoint)
           |> assign(:form, to_form(changeset))
           |> assign(:active_connection, active)
+          |> assign(:selected_uuids, selected_uuids)
           |> assign(:integration_connected, connected)
 
         # Load models if integration is connected
@@ -432,6 +460,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       socket
       |> assign(:form, form)
       |> assign(:active_connection, uuid)
+      |> assign(:selected_uuids, [uuid])
       |> assign(:integration_connected, connected)
 
     # Reload models with new connection
@@ -483,21 +512,33 @@ defmodule PhoenixKitAI.Web.EndpointForm do
   defp reload_connections(socket) do
     connections = Integrations.list_connections("openrouter")
     current_active = socket.assigns[:active_connection]
+    endpoint_uuid = socket.assigns[:endpoint] && socket.assigns.endpoint.integration_uuid
 
-    # Auto-select if only one connection and nothing valid is selected
-    active =
+    {active, orphaned} =
       cond do
-        # Current selection still exists in the list — keep it
+        # Current selection still exists in the list — keep it.
         current_active && Enum.any?(connections, &(&1.uuid == current_active)) ->
-          current_active
+          {current_active, nil}
 
-        # Only one connection — auto-select it
-        length(connections) == 1 ->
-          hd(connections).uuid
+        # Endpoint was originally pinned to a now-deleted integration.
+        # Keep `active` nil so we don't silently switch the endpoint
+        # to a different connection; surface the orphan to the picker.
+        endpoint_uuid && not Enum.any?(connections, &(&1.uuid == endpoint_uuid)) ->
+          {nil, endpoint_uuid}
 
-        # No valid selection — leave nil so picker shows empty state
+        # Only one connection AND no prior pin — auto-select it.
+        match?([_], connections) ->
+          {hd(connections).uuid, nil}
+
         true ->
-          nil
+          {nil, nil}
+      end
+
+    selected_uuids =
+      cond do
+        active -> [active]
+        orphaned -> [orphaned]
+        true -> []
       end
 
     connected = active && Integrations.connected?(active)
@@ -505,6 +546,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
     socket
     |> assign(:openrouter_connections, connections)
     |> assign(:active_connection, active)
+    |> assign(:selected_uuids, selected_uuids)
     |> assign(:integration_connected, connected)
   end
 

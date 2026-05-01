@@ -287,6 +287,57 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
 
       assert :sys.get_state(view.pid).socket.assigns.active_connection == real_uuid
     end
+
+    test "endpoint with deleted integration_uuid surfaces the orphan instead of auto-picking",
+         %{conn: conn} do
+      # Regression: when an endpoint's `integration_uuid` points at a
+      # deleted integration AND there happens to be exactly one OTHER
+      # current connection, the cond fall-through used to auto-select
+      # that unrelated connection — silently switching the endpoint to
+      # the wrong integration with no warning. Now `active` stays nil
+      # for orphaned uuids and the picker renders its "Integration
+      # deleted" warning card via `selected_uuids`.
+      orphaned_uuid = "01234567-89ab-7def-8000-000000010001"
+
+      # Seed a different integration so there's a "tempting" auto-pick
+      # candidate available.
+      %{uuid: live_uuid} =
+        seed_openrouter_connection("decoy-#{System.unique_integer([:positive])}")
+
+      endpoint = fixture_endpoint(integration_uuid: orphaned_uuid)
+
+      {:ok, view, html} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      # `active_connection` is nil — we do NOT silently switch the
+      # endpoint to the unrelated `live_uuid`.
+      assert assigns.active_connection == nil
+      refute assigns.active_connection == live_uuid
+
+      # `selected_uuids` carries the orphan so the picker renders the
+      # "Integration deleted" warning card.
+      assert assigns.selected_uuids == [orphaned_uuid]
+
+      # The warning text reaches the rendered HTML.
+      assert html =~ "Integration deleted"
+    end
+
+    test "endpoint with deleted integration_uuid AND no other connections still surfaces orphan",
+         %{conn: conn} do
+      # No live connection at all — the picker should still render the
+      # orphan warning, not just an empty state.
+      orphaned_uuid = "01234567-89ab-7def-8000-000000020002"
+
+      endpoint = fixture_endpoint(integration_uuid: orphaned_uuid)
+
+      {:ok, view, html} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.active_connection == nil
+      assert assigns.selected_uuids == [orphaned_uuid]
+      assert html =~ "Integration deleted"
+    end
   end
 
   describe "select_openrouter_connection event" do

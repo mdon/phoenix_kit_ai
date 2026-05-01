@@ -67,7 +67,7 @@
               <.integration_picker
                 id="endpoint-openrouter-picker"
                 connections={@openrouter_connections}
-                selected={if @active_connection, do: [@active_connection], else: []}
+                selected={@selected_uuids}
                 provider="openrouter"
                 compact={true}
                 on_select="select_openrouter_connection"
