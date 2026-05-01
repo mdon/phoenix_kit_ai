@@ -206,6 +206,7 @@ defmodule PhoenixKitAI.Completion do
   present (i.e. for non-reasoning models or when the operator opted out
   of returning reasoning via `reasoning_exclude: true`).
   """
+  @spec extract_reasoning(map()) :: String.t() | nil
   def extract_reasoning(response) do
     case response do
       %{"choices" => [%{"message" => message} | _]} when is_map(message) ->

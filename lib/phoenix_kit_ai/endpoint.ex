@@ -265,11 +265,13 @@ defmodule PhoenixKitAI.Endpoint do
   @doc """
   Returns the list of valid provider types.
   """
+  @spec valid_providers() :: [String.t()]
   def valid_providers, do: @valid_providers
 
   @doc """
   Returns provider options for form selects.
   """
+  @spec provider_options() :: [{String.t(), String.t()}]
   def provider_options do
     [
       {"OpenRouter", "openrouter"},
@@ -285,6 +287,7 @@ defmodule PhoenixKitAI.Endpoint do
   completions endpoint at `<base>/chat/completions`, so the same
   Completion HTTP layer works for them.
   """
+  @spec default_base_url(String.t()) :: String.t() | nil
   def default_base_url("openrouter"), do: "https://openrouter.ai/api/v1"
   def default_base_url("mistral"), do: "https://api.mistral.ai/v1"
   def default_base_url("deepseek"), do: "https://api.deepseek.com/v1"
@@ -293,6 +296,7 @@ defmodule PhoenixKitAI.Endpoint do
   @doc """
   Masks the API key for display, showing only the last 4 characters.
   """
+  @spec masked_api_key(String.t() | nil) :: String.t()
   def masked_api_key(nil), do: "Not set"
   def masked_api_key(""), do: "Not set"
 
@@ -305,7 +309,17 @@ defmodule PhoenixKitAI.Endpoint do
 
   @doc """
   Returns a display label for the provider.
+
+  Brand names stay un-translated by design — `"OpenRouter"`,
+  `"Mistral"`, `"DeepSeek"` are product trademarks, not user-facing
+  prose. Translating them would produce `"OpenRouter Соединение"` /
+  `"OpenRouter Verbindung"` style mixed strings that read worse
+  than the bilingual label they replace. The surrounding word
+  (`"Connection"` in the form's section header) IS gettext-wrapped
+  separately so the operator's locale picks up the localised
+  connector word; the brand stays the brand.
   """
+  @spec provider_label(String.t()) :: String.t()
   def provider_label("openrouter"), do: "OpenRouter"
   def provider_label("mistral"), do: "Mistral"
   def provider_label("deepseek"), do: "DeepSeek"

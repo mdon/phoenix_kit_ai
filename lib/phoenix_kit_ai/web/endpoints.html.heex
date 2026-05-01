@@ -156,30 +156,42 @@
                         <% endpoint.integration_uuid && is_nil(integration) -> %>
                           <span
                             class="badge badge-error badge-sm"
-                            title="The pinned integration was deleted. Edit the endpoint and select a new one."
+                            title={
+                              gettext(
+                                "The pinned integration was deleted. Edit the endpoint and select a new one."
+                              )
+                            }
                           >
-                            Integration missing
+                            {gettext("Integration missing")}
                           </span>
                         <% integration_status == "error" -> %>
                           <span
                             class="badge badge-error badge-sm"
-                            title="The integration's last validation failed. Open it in Settings → Integrations to retest."
+                            title={
+                              gettext(
+                                "The integration's last validation failed. Open it in Settings → Integrations to retest."
+                              )
+                            }
                           >
-                            Integration error
+                            {gettext("Integration error")}
                           </span>
                         <% integration && integration_status != "connected" -> %>
                           <span
                             class="badge badge-warning badge-sm"
-                            title="The integration is not currently connected. Open it in Settings → Integrations to test."
+                            title={
+                              gettext(
+                                "The integration is not currently connected. Open it in Settings → Integrations to test."
+                              )
+                            }
                           >
-                            Not connected
+                            {gettext("Not connected")}
                           </span>
                         <% is_nil(endpoint.integration_uuid) -> %>
                           <span
                             class="badge badge-warning badge-sm"
-                            title="No integration selected. Edit the endpoint to pick one."
+                            title={gettext("No integration selected. Edit the endpoint to pick one.")}
                           >
-                            No integration
+                            {gettext("No integration")}
                           </span>
                         <% true -> %>
                       <% end %>
@@ -205,19 +217,19 @@
                     <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-base-content/60">
                       <div class="flex items-center gap-1">
                         <.icon name="hero-link" class="w-3.5 h-3.5" />
-                        <span class="font-medium text-base-content/70">Integration:</span>
+                        <span class="font-medium text-base-content/70">{gettext("Integration:")}</span>
                         <%= cond do %>
                           <% integration -> %>
                             <span>{integration.name}</span>
                           <% endpoint.integration_uuid -> %>
-                            <span class="text-error">Deleted</span>
+                            <span class="text-error">{gettext("Deleted")}</span>
                           <% true -> %>
-                            <span class="italic">none</span>
+                            <span class="italic">{gettext("none")}</span>
                         <% end %>
                       </div>
                       <div class="flex items-center gap-1">
                         <.icon name="hero-key" class="w-3.5 h-3.5" />
-                        <span class="font-medium text-base-content/70">Key:</span>
+                        <span class="font-medium text-base-content/70">{gettext("Key:")}</span>
                         <span class="font-mono">
                           {if integration,
                             do: PhoenixKitAI.Web.Endpoints.mask_api_key(integration.data["api_key"]),
@@ -299,6 +311,7 @@
                     <button
                       phx-click="toggle_endpoint"
                       phx-value-uuid={endpoint.uuid}
+                      phx-disable-with={gettext("Updating…")}
                       class="btn btn-xs btn-outline btn-info tooltip tooltip-bottom"
                       data-tip={
                         if endpoint.enabled, do: gettext("Disable"), else: gettext("Enable")

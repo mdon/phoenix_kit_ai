@@ -2546,7 +2546,10 @@ defmodule PhoenixKitAI do
     # the final answer in a `reasoning` / `reasoning_content` /
     # `thinking` field. Capture it next to `response` so the request
     # detail page can surface it later — currently dropped on the floor
-    # when only `content` is extracted.
+    # when only `content` is extracted. Subject to the same
+    # `capture_request_content?` gate as `response` (see below) — when
+    # content capture is off, reasoning is dropped too. Reasoning can
+    # contain anything the prompt mentioned, so it's PII-equivalent.
     response_reasoning = Completion.extract_reasoning(response)
 
     # User-content persistence is opt-out. Default `true` preserves the

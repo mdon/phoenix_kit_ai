@@ -840,6 +840,16 @@ defmodule PhoenixKitAI.Web.EndpointForm do
         {:noreply, socket}
 
       {:error, reason} ->
+        # Log the failure with grep-able context (provider + reason) so
+        # operators can correlate "model dropdown is empty" reports with
+        # upstream API issues. Provider is the form-side selection at
+        # the time of fetch.
+        Logger.warning(fn ->
+          "[PhoenixKitAI.Web.EndpointForm] model fetch failed: " <>
+            "provider=#{inspect(socket.assigns[:current_provider])}, " <>
+            "reason=#{inspect(reason)}"
+        end)
+
         socket =
           socket
           |> assign(:models_loading, false)

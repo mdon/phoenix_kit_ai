@@ -182,6 +182,39 @@ defmodule PhoenixKitAI.OpenRouterClientCoverageTest do
         assert {:error, {:connection_error, :timeout}} = OpenRouterClient.fetch_models("sk-x")
       end)
     end
+
+    test ":text filter accepts models with no architecture (Mistral / DeepSeek shape)" do
+      # Mistral and DeepSeek's /v1/models responses don't return an
+      # `architecture` field at all — the strict `modality == "text->text"`
+      # match would drop every one of their models. The fetcher's
+      # `model_matches_type?` was loosened to treat missing modality as
+      # text-by-default; this test pins that.
+      stub_response(200, %{
+        "data" => [
+          %{"id" => "mistral-large-latest", "object" => "model"},
+          %{"id" => "deepseek-chat", "object" => "model"}
+        ]
+      })
+
+      {:ok, models} = OpenRouterClient.fetch_models("sk-x", model_type: :text)
+      ids = Enum.map(models, & &1.id) |> Enum.sort()
+      assert ids == ["deepseek-chat", "mistral-large-latest"]
+    end
+
+    test ":vision filter still rejects models with no architecture" do
+      # Loosening `:text` to accept missing-modality models doesn't
+      # cascade to other filter types — `:vision` requires an explicit
+      # `text+image->text` modality.
+      stub_response(200, %{
+        "data" => [
+          %{"id" => "mistral-large-latest", "object" => "model"},
+          %{"id" => "v/m", "architecture" => %{"modality" => "text+image->text"}}
+        ]
+      })
+
+      {:ok, models} = OpenRouterClient.fetch_models("sk-x", model_type: :vision)
+      assert Enum.map(models, & &1.id) == ["v/m"]
+    end
   end
 
   describe "fetch_models_grouped + fetch_models_by_type" do
@@ -214,6 +247,54 @@ defmodule PhoenixKitAI.OpenRouterClientCoverageTest do
     test "fetch_models_grouped returns the underlying error" do
       stub_response(401, %{})
       assert {:error, :invalid_api_key} = OpenRouterClient.fetch_models_grouped("sk-x")
+    end
+
+    test ":fallback_provider groups slash-less IDs under the given key (Mistral/DeepSeek)" do
+      # Mistral (`mistral-large-latest`) and DeepSeek (`deepseek-chat`)
+      # model IDs are flat strings — the OpenRouter `provider/model`
+      # split returns the whole id as the provider. Without
+      # `:fallback_provider`, each model would land in its own one-off
+      # group (the picker would render dozens of single-model groups).
+      # With it, all of a provider's models cluster under one entry.
+      stub_response(200, %{
+        "data" => [
+          %{"id" => "mistral-large-latest", "object" => "model"},
+          %{"id" => "mistral-small-latest", "object" => "model"},
+          %{"id" => "codestral-latest", "object" => "model"}
+        ]
+      })
+
+      {:ok, grouped} =
+        OpenRouterClient.fetch_models_grouped("sk-x",
+          model_type: :all,
+          fallback_provider: "mistral"
+        )
+
+      assert [{"mistral", models}] = grouped
+      assert length(models) == 3
+    end
+
+    test ":base_url overrides the default OpenRouter URL" do
+      # Without this opt the model fetcher hardcodes
+      # `https://openrouter.ai/api/v1/models` regardless of which
+      # provider's endpoint the operator is configuring. Pass
+      # `:base_url` to hit Mistral / DeepSeek / any other
+      # OpenAI-compatible /models endpoint.
+      stub_response(200, %{
+        "data" => [
+          %{"id" => "deepseek-chat", "object" => "model"}
+        ]
+      })
+
+      {:ok, grouped} =
+        OpenRouterClient.fetch_models_grouped("sk-x",
+          model_type: :all,
+          base_url: "https://api.deepseek.com/v1",
+          fallback_provider: "deepseek"
+        )
+
+      assert [{"deepseek", [model]}] = grouped
+      assert model.id == "deepseek-chat"
     end
   end
 

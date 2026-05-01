@@ -445,9 +445,33 @@ defmodule PhoenixKitAI.OpenRouterClient do
           log_lazy_promotion(endpoint, integration_uuid)
         end
       rescue
-        _ -> :ok
+        e ->
+          # Lazy promotion is best-effort — the request that triggered
+          # this already got its api_key from the legacy fallback path,
+          # so we don't want a write failure here to cascade into a
+          # request-path crash. Log with grep-able context (endpoint
+          # uuid + exception type) so operators can correlate stuck
+          # promotions with infra issues. Don't include
+          # `Exception.message/1` raw — some exception structs embed
+          # query bindings that could leak provider/api_key context.
+          Logger.warning(fn ->
+            "[OpenRouterClient] lazy promotion of integration_uuid failed: " <>
+              "endpoint_uuid=#{endpoint.uuid}, " <>
+              "exception=#{inspect(e.__struct__)}"
+          end)
+
+          :ok
       catch
-        :exit, _ -> :ok
+        :exit, reason ->
+          # Sandbox-owner exit at test boundaries falls here. Same
+          # justification as the rescue above — don't crash the
+          # request, but leave a breadcrumb.
+          Logger.debug(fn ->
+            "[OpenRouterClient] lazy promotion exited: " <>
+              "endpoint_uuid=#{endpoint.uuid}, reason=#{inspect(reason)}"
+          end)
+
+          :ok
       end
     end
 
