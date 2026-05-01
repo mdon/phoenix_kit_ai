@@ -2541,6 +2541,14 @@ defmodule PhoenixKitAI do
         _ -> nil
       end
 
+    # Reasoning models (DeepSeek-R1, Mistral Magistral, OpenAI o-series,
+    # Anthropic extended thinking) return the chain-of-thought alongside
+    # the final answer in a `reasoning` / `reasoning_content` /
+    # `thinking` field. Capture it next to `response` so the request
+    # detail page can surface it later — currently dropped on the floor
+    # when only `content` is extracted.
+    response_reasoning = Completion.extract_reasoning(response)
+
     # User-content persistence is opt-out. Default `true` preserves the
     # debugging shape we've shipped so far; deployments with PII or
     # data-retention obligations can flip it off via
@@ -2570,6 +2578,7 @@ defmodule PhoenixKitAI do
         Map.merge(base_metadata, %{
           messages: normalized,
           response: response_content,
+          response_reasoning: response_reasoning,
           request_payload: request_payload
         })
       else

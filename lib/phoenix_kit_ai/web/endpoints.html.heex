@@ -945,6 +945,26 @@
           </div>
         <% end %>
 
+        <%!-- Reasoning / chain-of-thought (reasoning models only).
+             Collapsed by default since the reasoning can dwarf the
+             actual answer and would otherwise dominate the panel.
+             Source field varies by provider — see Completion.extract_reasoning/1. --%>
+        <%= if @selected_request.metadata["response_reasoning"] do %>
+          <details class="mb-4">
+            <summary class="text-xs text-base-content/70 mb-1 cursor-pointer hover:text-base-content">
+              {gettext("Reasoning")} ({String.length(@selected_request.metadata["response_reasoning"])} chars)
+            </summary>
+            <div class="bg-info/10 border-l-2 border-info p-3 rounded mt-1">
+              <div class="text-xs font-semibold text-base-content/70 mb-1 uppercase">
+                {gettext("chain of thought")}
+              </div>
+              <div class="text-sm whitespace-pre-wrap font-mono">
+                {@selected_request.metadata["response_reasoning"]}
+              </div>
+            </div>
+          </details>
+        <% end %>
+
         <%!-- Parameters Used --%>
         <% params_to_show =
           Map.take(@selected_request.metadata || %{}, ["temperature", "max_tokens"]) %>
