@@ -148,6 +148,49 @@ defmodule PhoenixKitAI.OpenRouterClient.LegacyFallbackTest do
 
       refute log =~ "deprecated endpoint.api_key"
     end
+
+    test "empty provider field falls through cleanly to the legacy api_key column" do
+      # Pins `maybe_get_credentials("")` — the empty-string clause.
+      # An endpoint with `provider: ""` (e.g. fully-cleared after
+      # operator removed the legacy reference manually) should still
+      # fall through to the api_key column without crashing on the
+      # empty provider lookup.
+      endpoint = %Endpoint{
+        uuid: "01234567-89ab-7def-8000-0000000000cc",
+        name: "Empty Provider",
+        provider: "",
+        api_key: "sk-or-v1-fallback",
+        provider_settings: %{}
+      }
+
+      headers =
+        capture_log(fn ->
+          # Capture log silently — the deprecation warning fires for
+          # any api_key path use, but that's not what this test pins.
+          assert {"Authorization", "Bearer sk-or-v1-fallback"} in
+                   OpenRouterClient.build_headers_from_endpoint(endpoint)
+        end)
+
+      assert is_binary(headers)
+    end
+
+    test "nil provider field also falls through to the legacy api_key column" do
+      # Pins `maybe_get_credentials(nil)` — the nil clause. Same
+      # shape as the empty-string case but ensures the nil-vs-empty
+      # symmetry holds.
+      endpoint = %Endpoint{
+        uuid: "01234567-89ab-7def-8000-0000000000dd",
+        name: "Nil Provider",
+        provider: nil,
+        api_key: "sk-or-v1-nil-fallback",
+        provider_settings: %{}
+      }
+
+      capture_log(fn ->
+        assert {"Authorization", "Bearer sk-or-v1-nil-fallback"} in
+                 OpenRouterClient.build_headers_from_endpoint(endpoint)
+      end)
+    end
   end
 
   describe "build_headers_from_endpoint/1 — integration_uuid resolution" do
