@@ -747,12 +747,12 @@
                             {PhoenixKitAI.Request.status_label(request.status)}
                           </span>
                           <%= if request.error_message do %>
-                            <div class="tooltip" data-tip={request.error_message}>
+                            <span title={request.error_message} class="inline-block align-middle">
                               <.icon
                                 name="hero-information-circle"
                                 class="w-4 h-4 text-error ml-1"
                               />
-                            </div>
+                            </span>
                           <% end %>
                         </td>
                         <%!-- Hidden until xl (accounts for sidebar) --%>
@@ -762,13 +762,24 @@
                         >
                           {request.metadata["source"] || "-"}
                         </td>
-                        <%!-- Always visible --%>
+                        <%!-- Always visible. No daisyUI tooltip — its
+                             absolutely-positioned pseudo-element extends
+                             below the row in layout space and, because
+                             the wrapper uses overflow-x-auto (which the
+                             CSS spec coerces overflow-y to auto from
+                             visible), the row's scrollHeight grows by
+                             ~19px per row and a vertical scrollbar
+                             appears even on a 2-row table. The eye icon
+                             at ≥sm and the "View" text at <sm are
+                             self-documenting; an HTML title attribute
+                             keeps the hover affordance for icon-only
+                             viewports without contributing to layout. --%>
                         <td>
                           <button
                             phx-click="show_request_details"
                             phx-value-uuid={request.uuid}
-                            class="btn btn-xs btn-outline btn-info tooltip tooltip-bottom"
-                            data-tip={gettext("View")}
+                            title={gettext("View")}
+                            class="btn btn-xs btn-outline btn-info"
                           >
                             <.icon name="hero-eye" class="w-4 h-4 hidden sm:inline" />
                             <span class="sm:hidden whitespace-nowrap">{gettext("View")}</span>
