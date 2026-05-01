@@ -70,33 +70,21 @@ repo_available =
     try do
       {:ok, _} = TestRepo.start_link()
 
-      # uuid-ossp + pgcrypto extensions + uuid_generate_v7 (normally
-      # provided by core PhoenixKit's V40 migration). pgcrypto supplies
-      # `gen_random_bytes/1` used inside `uuid_generate_v7()` — without
-      # it the function compiles but raises at first call with
-      # "function gen_random_bytes does not exist".
-      TestRepo.query!("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
-      TestRepo.query!("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-
-      TestRepo.query!("""
-      CREATE OR REPLACE FUNCTION uuid_generate_v7()
-      RETURNS uuid AS $$
-      DECLARE
-        unix_ts_ms bytea;
-        uuid_bytes bytea;
-      BEGIN
-        unix_ts_ms := substring(int8send(floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint) FROM 3);
-        uuid_bytes := unix_ts_ms || gen_random_bytes(10);
-        uuid_bytes := set_byte(uuid_bytes, 6, (get_byte(uuid_bytes, 6) & 15) | 112);
-        uuid_bytes := set_byte(uuid_bytes, 8, (get_byte(uuid_bytes, 8) & 63) | 128);
-        RETURN encode(uuid_bytes, 'hex')::uuid;
-      END;
-      $$ LANGUAGE plpgsql VOLATILE;
-      """)
-
-      # Run the test migrations. `priv: "test/support/postgres"` in
-      # config/test.exs points Ecto.Migrator at the right folder.
-      Ecto.Migrator.run(TestRepo, :up, all: true)
+      # Build the schema directly from core's versioned migrations —
+      # same call the host app makes in production. Core's V40 creates
+      # the `uuid-ossp` / `pgcrypto` extensions + `uuid_generate_v7()`
+      # function; V57+ creates the AI tables; V107 adds the
+      # `integration_uuid` column + UNIQUE index on `lower(name)` that
+      # this module's schema and tests depend on. No module-owned DDL.
+      #
+      # Standalone runs against Hex `phoenix_kit ~> 1.7` will fail at
+      # boot with "column integration_uuid does not exist" if the
+      # published Hex version pre-dates V107 — that's expected. The
+      # canonical test channel for this module is via
+      # `phoenix_kit_parent` (path-dep `override: true` resolves
+      # `phoenix_kit` to the local checkout, which has V107). See
+      # ~/.claude memory `feedback_run_tests_via_parent.md`.
+      Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, all: true, log: false)
 
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true

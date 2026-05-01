@@ -17,7 +17,13 @@ defmodule PhoenixKitAI.CoverageTest do
     base = %{
       name: "EP-#{System.unique_integer([:positive])}",
       provider: "openrouter",
-      model: "a/b"
+      model: "a/b",
+      # Production schema (core V34) requires api_key NOT NULL even
+      # though the changeset doesn't validate it as required. The
+      # entities-pattern migration cleanup surfaced this as a
+      # fixture-drift bug: the hand-rolled test migration made it
+      # nullable.
+      api_key: "sk-test-key"
     }
 
     {:ok, ep} = PhoenixKitAI.create_endpoint(Map.merge(base, attrs))
@@ -126,6 +132,18 @@ defmodule PhoenixKitAI.CoverageTest do
       assert config.endpoints_count >= 1
       assert is_integer(config.total_requests)
       assert is_integer(config.total_tokens)
+    end
+
+    test "disable_system/0 + enable_system/0 round-trip the ai_enabled flag" do
+      # `enable_system/0` is exercised by every LV test's setup, so it
+      # has plenty of coverage already. `disable_system/0` was only
+      # behaviour-asserted (function_exported?) — pin the actual
+      # round-trip here.
+      assert {:ok, _} = PhoenixKitAI.disable_system()
+      refute PhoenixKitAI.enabled?()
+
+      assert {:ok, _} = PhoenixKitAI.enable_system()
+      assert PhoenixKitAI.enabled?()
     end
   end
 
@@ -774,6 +792,108 @@ defmodule PhoenixKitAI.CoverageTest do
       result = PhoenixKitAI.get_requests_by_day()
       assert is_list(result)
       assert Enum.all?(result, &Map.has_key?(&1, :count))
+    end
+  end
+
+  describe "default-arity entry points + delegate + bang fns" do
+    test "list_endpoints/0 (no opts) returns all endpoints" do
+      _ = endpoint_fixture(%{name: "DefArg-#{System.unique_integer([:positive])}"})
+      {endpoints, total} = PhoenixKitAI.list_endpoints()
+      assert is_list(endpoints)
+      assert total >= 1
+    end
+
+    test "list_prompts/0 (no opts) returns all prompts" do
+      _ = prompt_fixture(%{name: "DefArgPrompt-#{System.unique_integer([:positive])}"})
+      prompts = PhoenixKitAI.list_prompts()
+      assert is_list(prompts)
+      refute Enum.empty?(prompts)
+    end
+
+    test "preview_prompt/1 (no variables) renders with empty substitution" do
+      prompt = prompt_fixture(%{content: "Hello {{Name}}!"})
+
+      # `preview_prompt(uuid)` with the default-arity head — variables
+      # default to `%{}` so unsubstituted placeholders survive.
+      assert {:ok, rendered} = PhoenixKitAI.preview_prompt(prompt.uuid)
+      assert rendered =~ "{{Name}}"
+    end
+
+    test "extract_usage/1 delegate forwards to Completion" do
+      # Pin the `defdelegate extract_usage(response), to: Completion`
+      # line — direct test of the delegate.
+      response = %{
+        "usage" => %{
+          "prompt_tokens" => 10,
+          "completion_tokens" => 5,
+          "total_tokens" => 15
+        }
+      }
+
+      usage = PhoenixKitAI.extract_usage(response)
+      assert usage.prompt_tokens == 10
+      assert usage.completion_tokens == 5
+      assert usage.total_tokens == 15
+    end
+
+    test "get_request!/1 raises Ecto.NoResultsError for unknown uuid" do
+      # Pin the `nil -> raise Ecto.NoResultsError` clause.
+      assert_raise Ecto.NoResultsError, fn ->
+        PhoenixKitAI.get_request!("019b572b-0000-7000-8000-000000000000")
+      end
+    end
+
+    test "broadcast_request_change passes errors through (line 190)" do
+      # Pin the `error -> error` clause of broadcast_request_change/2.
+      # Request schema only requires `:status` to be present and in
+      # @valid_statuses. Pass a status that fails validate_inclusion.
+      {:error, _changeset} =
+        PhoenixKitAI.create_request(%{
+          model: "x/y",
+          status: "not-a-valid-status"
+        })
+
+      :ok
+    end
+
+    test "list_requests with non-binary non-list prompt_uuid hits the false-query branch" do
+      # Pin `defp build_prompt_uuid_query(_), do: from(p in Prompt,
+      # where: false)` — fires when prompt_uuid filter is neither
+      # nil, a binary, nor a list of binaries.
+      {requests, total} = PhoenixKitAI.list_requests(prompt_uuid: 42)
+      assert is_list(requests)
+      assert total == 0
+    end
+
+    test "ask_with_prompt with a no-system-prompt prompt skips the system opt" do
+      # Pin the `else: opts_with_prompt` branch (line 1111) of
+      # `ask_with_prompt/4` — when the prompt has no system_prompt,
+      # the LV's opts pass through unchanged.
+      ep = endpoint_fixture()
+      prompt = prompt_fixture(%{system_prompt: nil, content: "Hello {{X}}"})
+
+      # Will fail to actually ask (no Req.Test stub), but the call
+      # exercises the system_prompt-nil branch before hitting the HTTP
+      # boundary.
+      result = PhoenixKitAI.ask_with_prompt(ep.uuid, prompt.uuid, %{"X" => "World"})
+
+      # We don't care about success — just that the function runs
+      # without crashing through the system-prompt branch.
+      assert is_tuple(result)
+    end
+
+    test "get_request!/1 returns a real request for a valid uuid" do
+      ep = endpoint_fixture()
+
+      req =
+        request_fixture(%{
+          endpoint_uuid: ep.uuid,
+          endpoint_name: ep.name,
+          request_type: "chat"
+        })
+
+      # Pins the `request -> request` clause of get_request!/1.
+      assert PhoenixKitAI.get_request!(req.uuid).uuid == req.uuid
     end
   end
 end

@@ -97,6 +97,100 @@ defmodule PhoenixKitAI.CompletionTest do
     end
   end
 
+  describe "extract_reasoning/1" do
+    # Reasoning models put the chain-of-thought in different fields per
+    # provider. The fetcher walks all three known shapes and returns the
+    # first non-empty binary it finds. These tests pin the parser
+    # against each shape so a provider's response format change is
+    # caught before it silently drops reasoning from the request log.
+
+    test "extracts from OpenRouter shape (`reasoning` field)" do
+      response = %{
+        "choices" => [
+          %{"message" => %{"reasoning" => "step 1: …", "content" => "answer"}}
+        ]
+      }
+
+      assert Completion.extract_reasoning(response) == "step 1: …"
+    end
+
+    test "extracts from DeepSeek-native shape (`reasoning_content` field)" do
+      response = %{
+        "choices" => [
+          %{
+            "message" => %{
+              "reasoning_content" => "deepseek thinking …",
+              "content" => "answer"
+            }
+          }
+        ]
+      }
+
+      assert Completion.extract_reasoning(response) == "deepseek thinking …"
+    end
+
+    test "extracts from `thinking` field (some providers)" do
+      response = %{
+        "choices" => [
+          %{"message" => %{"thinking" => "ruminating …", "content" => "answer"}}
+        ]
+      }
+
+      assert Completion.extract_reasoning(response) == "ruminating …"
+    end
+
+    test "returns nil when no reasoning field is present (non-reasoning model)" do
+      response = %{
+        "choices" => [%{"message" => %{"content" => "just an answer"}}]
+      }
+
+      assert Completion.extract_reasoning(response) == nil
+    end
+
+    test "treats empty-string reasoning as nil (skips empties, doesn't return)" do
+      # Some providers return an empty string when reasoning is absent
+      # rather than omitting the field. Don't surface a no-op trace as
+      # if it were content.
+      response = %{
+        "choices" => [
+          %{
+            "message" => %{
+              "reasoning" => "",
+              "reasoning_content" => "",
+              "content" => "answer"
+            }
+          }
+        ]
+      }
+
+      assert Completion.extract_reasoning(response) == nil
+    end
+
+    test "prefers `reasoning` over `reasoning_content` when both present" do
+      # The walk order is reasoning → reasoning_content → thinking.
+      # OpenRouter's convention wins when a provider it proxies returns
+      # both shapes (defensive against providers that double-fill).
+      response = %{
+        "choices" => [
+          %{
+            "message" => %{
+              "reasoning" => "openrouter shape",
+              "reasoning_content" => "deepseek shape"
+            }
+          }
+        ]
+      }
+
+      assert Completion.extract_reasoning(response) == "openrouter shape"
+    end
+
+    test "returns nil for malformed responses" do
+      assert Completion.extract_reasoning(%{}) == nil
+      assert Completion.extract_reasoning(%{"choices" => []}) == nil
+      assert Completion.extract_reasoning(%{"choices" => [%{}]}) == nil
+    end
+  end
+
   describe "extract_usage/1" do
     test "reads token counts and cost" do
       response = %{

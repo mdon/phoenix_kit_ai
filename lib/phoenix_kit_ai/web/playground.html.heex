@@ -1,8 +1,10 @@
 <div class="container flex-col mx-auto px-4 py-6">
     <.admin_page_header back={PhoenixKit.Utils.Routes.path("/admin")}>
-      <h1 class="text-xl sm:text-2xl lg:text-3xl font-bold text-base-content">AI Playground</h1>
+      <h1 class="text-xl sm:text-2xl lg:text-3xl font-bold text-base-content">
+        {gettext("AI Playground")}
+      </h1>
       <p class="text-sm text-base-content/60 mt-0.5">
-        Test endpoints and prompts interactively
+        {gettext("Test endpoints and prompts interactively")}
       </p>
     </.admin_page_header>
 
@@ -15,25 +17,25 @@
             navigate={PhoenixKit.Utils.Routes.ai_path() <> "/endpoints"}
             class="tab"
           >
-            <.icon name="hero-server-stack" class="w-4 h-4 mr-2" /> Endpoints
+            <.icon name="hero-server-stack" class="w-4 h-4 mr-2" /> {gettext("Endpoints")}
           </.link>
           <.link
             navigate={PhoenixKit.Utils.Routes.ai_path() <> "/prompts"}
             class="tab"
           >
-            <.icon name="hero-document-text" class="w-4 h-4 mr-2" /> Prompts
+            <.icon name="hero-document-text" class="w-4 h-4 mr-2" /> {gettext("Prompts")}
           </.link>
           <.link
             navigate={PhoenixKit.Utils.Routes.ai_path() <> "/playground"}
             class="tab tab-active"
           >
-            <.icon name="hero-beaker" class="w-4 h-4 mr-2" /> Playground
+            <.icon name="hero-beaker" class="w-4 h-4 mr-2" /> {gettext("Playground")}
           </.link>
           <.link
             navigate={PhoenixKit.Utils.Routes.ai_path() <> "/usage"}
             class="tab"
           >
-            <.icon name="hero-chart-bar" class="w-4 h-4 mr-2" /> Usage
+            <.icon name="hero-chart-bar" class="w-4 h-4 mr-2" /> {gettext("Usage")}
           </.link>
         </div>
       </div>
@@ -45,18 +47,18 @@
         <div class="card bg-base-200">
           <div class="card-body">
             <h2 class="card-title text-lg">
-              <.icon name="hero-cog-6-tooth" class="w-5 h-5" /> Configuration
+              <.icon name="hero-cog-6-tooth" class="w-5 h-5" /> {gettext("Configuration")}
             </h2>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
               <%!-- Endpoint Selector --%>
               <div>
                 <label class="block text-sm font-medium mb-2">
-                  Endpoint <span class="text-error">*</span>
+                  {gettext("Endpoint")} <span class="text-error">*</span>
                 </label>
                 <label class="select w-full">
                   <select name="endpoint_uuid">
-                    <option value="">Select an endpoint...</option>
+                    <option value="">{gettext("Select an endpoint...")}</option>
                     <%= for endpoint <- @endpoints do %>
                       <option
                         value={endpoint.uuid}
@@ -71,9 +73,9 @@
                 </label>
                 <%= if Enum.empty?(@endpoints) do %>
                   <p class="text-sm text-warning mt-1">
-                    No enabled endpoints.
+                    {gettext("No enabled endpoints.")}
                     <.pk_link navigate="/admin/ai/endpoints/new" class="link link-primary">
-                      Create one
+                      {gettext("Create one")}
                     </.pk_link>
                   </p>
                 <% end %>
@@ -82,11 +84,12 @@
               <%!-- Prompt Selector --%>
               <div>
                 <label class="block text-sm font-medium mb-2">
-                  Prompt <span class="text-base-content/60 font-normal ml-2">Optional</span>
+                  {gettext("Prompt")}
+                  <span class="text-base-content/60 font-normal ml-2">{gettext("Optional")}</span>
                 </label>
                 <label class="select w-full">
                   <select name="prompt_uuid">
-                    <option value="">Freeform (no prompt template)</option>
+                    <option value="">{gettext("Freeform (no prompt template)")}</option>
                     <%= for prompt <- @prompts do %>
                       <option value={prompt.uuid} selected={prompt.uuid == @selected_prompt_uuid}>
                         {prompt.name}
@@ -116,7 +119,7 @@
               <%= if @selected_prompt.system_prompt && @selected_prompt.system_prompt != "" do %>
                 <div class="mt-2">
                   <label class="block text-xs font-medium text-base-content/60 mb-1">
-                    System Prompt
+                    {gettext("System Prompt")}
                   </label>
                   <div class="bg-base-300 rounded-lg p-3 text-sm font-mono whitespace-pre-wrap text-base-content/80">
                     {@selected_prompt.system_prompt}
@@ -127,8 +130,8 @@
               <%!-- Editable Content --%>
               <div class="mt-2">
                 <label class="block text-xs font-medium text-base-content/60 mb-1">
-                  Prompt Template
-                  <span class="text-base-content/40 font-normal ml-1">(editable)</span>
+                  {gettext("Prompt Template")}
+                  <span class="text-base-content/40 font-normal ml-1">{gettext("(editable)")}</span>
                 </label>
                 <div id={"edited-content-wrap-#{@selected_prompt.uuid}"} phx-update="ignore">
                   <textarea
@@ -148,7 +151,7 @@
 
               <%!-- Variable Inputs --%>
               <%= if length(@edited_variables) > 0 do %>
-                <div class="divider text-sm">Variables</div>
+                <div class="divider text-sm">{gettext("Variables")}</div>
                 <div class="space-y-3">
                   <%= for var <- @edited_variables do %>
                     <div>
@@ -161,7 +164,7 @@
                         class="textarea textarea-bordered w-full text-sm"
                         rows="2"
                         name={"variables[#{var}]"}
-                        placeholder={"Enter value for #{var}..."}
+                        placeholder={gettext("Enter value for %{name}...", name: var)}
                         phx-debounce="300"
                       >{Map.get(@variable_values, var, "")}</textarea>
                     </div>
@@ -171,20 +174,20 @@
             <% else %>
               <%!-- Freeform Mode --%>
               <h2 class="card-title text-lg">
-                <.icon name="hero-chat-bubble-left-right" class="w-5 h-5" /> Message
+                <.icon name="hero-chat-bubble-left-right" class="w-5 h-5" /> {gettext("Message")}
               </h2>
 
               <%!-- System Prompt --%>
               <div class="mt-2">
                 <label class="block text-sm font-medium mb-2">
-                  System Prompt
-                  <span class="text-base-content/60 font-normal ml-2">Optional</span>
+                  {gettext("System Prompt")}
+                  <span class="text-base-content/60 font-normal ml-2">{gettext("Optional")}</span>
                 </label>
                 <textarea
                   class="textarea textarea-bordered w-full text-sm"
                   rows="2"
                   name="system"
-                  placeholder="Optional system instructions..."
+                  placeholder={gettext("Optional system instructions...")}
                   phx-debounce="300"
                 >{@freeform_system}</textarea>
               </div>
@@ -192,13 +195,13 @@
               <%!-- User Message --%>
               <div class="mt-3">
                 <label class="block text-sm font-medium mb-2">
-                  Message <span class="text-error">*</span>
+                  {gettext("Message")} <span class="text-error">*</span>
                 </label>
                 <textarea
                   class="textarea textarea-bordered w-full text-sm"
                   rows="4"
                   name="message"
-                  placeholder="Type your message to the AI..."
+                  placeholder={gettext("Type your message to the AI...")}
                   phx-debounce="300"
                 >{@freeform_message}</textarea>
               </div>
@@ -212,7 +215,7 @@
                 phx-click="clear"
                 disabled={@sending}
               >
-                Clear
+                {gettext("Clear")}
               </button>
               <button
                 type="submit"
@@ -243,7 +246,7 @@
             <div class="card-body">
               <div class="flex items-center gap-2 mb-3">
                 <span class="loading loading-spinner loading-sm text-primary"></span>
-                <span class="text-sm text-base-content/60">Waiting for response...</span>
+                <span class="text-sm text-base-content/60">{gettext("Waiting for response...")}</span>
               </div>
               <div class="space-y-3">
                 <div class="bg-base-300 rounded h-4 w-3/4"></div>
@@ -264,7 +267,7 @@
           >
             <.icon name="hero-exclamation-triangle" class="w-5 h-5" />
             <div>
-              <div class="font-medium">Error</div>
+              <div class="font-medium">{gettext("Error")}</div>
               <div class="text-sm">{@response_error}</div>
             </div>
           </div>
@@ -279,7 +282,7 @@
           >
             <div class="card-body">
               <h2 class="card-title text-lg">
-                <.icon name="hero-sparkles" class="w-5 h-5" /> Response
+                <.icon name="hero-sparkles" class="w-5 h-5" /> {gettext("Response")}
               </h2>
 
               <%!-- Usage Stats --%>
@@ -287,17 +290,17 @@
                 <div class="flex flex-wrap gap-3 text-xs text-base-content/60">
                   <span>
                     <.icon name="hero-arrow-up" class="w-3 h-3 inline" />
-                    {PhoenixKitAI.Request.format_tokens(@response_usage.prompt_tokens)} in
+                    {PhoenixKitAI.Request.format_tokens(@response_usage.prompt_tokens)} {gettext("in")}
                   </span>
                   <span>
                     <.icon name="hero-arrow-down" class="w-3 h-3 inline" />
                     {PhoenixKitAI.Request.format_tokens(
                       @response_usage.completion_tokens
-                    )} out
+                    )} {gettext("out")}
                   </span>
                   <span>
                     <.icon name="hero-calculator" class="w-3 h-3 inline" />
-                    {PhoenixKitAI.Request.format_tokens(@response_usage.total_tokens)} total
+                    {PhoenixKitAI.Request.format_tokens(@response_usage.total_tokens)} {gettext("total")}
                   </span>
                   <%= if @response_usage.cost_cents do %>
                     <span>

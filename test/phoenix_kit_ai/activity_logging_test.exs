@@ -21,7 +21,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
           %{
             name: "Activity Test Created",
             provider: "openrouter",
-            model: "a/b"
+            model: "a/b",
+            api_key: "sk-test-key"
           },
           actor_uuid: actor,
           actor_role: "admin"
@@ -39,7 +40,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "To Update",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       actor = Ecto.UUID.generate()
@@ -56,6 +58,7 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Toggle Off",
           provider: "openrouter",
+          api_key: "sk-test-key",
           model: "a/b",
           enabled: true
         })
@@ -71,6 +74,7 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Toggle On",
           provider: "openrouter",
+          api_key: "sk-test-key",
           model: "a/b",
           enabled: false
         })
@@ -86,6 +90,7 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Same State",
           provider: "openrouter",
+          api_key: "sk-test-key",
           model: "a/b",
           enabled: true
         })
@@ -102,7 +107,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "To Delete",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       {:ok, _} = PhoenixKitAI.delete_endpoint(endpoint)
@@ -110,20 +116,72 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
       assert_activity_logged("endpoint.deleted", resource_uuid: endpoint.uuid)
     end
 
-    test "failed update does NOT emit any activity" do
+    test "failed update emits a `db_pending` audit row with error_keys" do
+      # Failure-branch audit row was added in the F1 quality sweep —
+      # admin clicks survive a DB outage / validation rejection because
+      # the audit feed records the attempt with `db_pending: true` and
+      # the validation `error_keys` so consumers can distinguish
+      # attempted-but-failed from completed mutations.
+      actor = Ecto.UUID.generate()
+
       {:ok, endpoint} =
-        PhoenixKitAI.create_endpoint(%{
-          name: "Stays Same",
-          provider: "openrouter",
-          model: "a/b"
-        })
+        PhoenixKitAI.create_endpoint(
+          %{
+            name: "Stays Same #{System.unique_integer([:positive])}",
+            provider: "openrouter",
+            model: "a/b",
+            api_key: "sk-test-key"
+          },
+          actor_uuid: actor,
+          actor_role: "admin"
+        )
 
       {:error, _changeset} =
-        PhoenixKitAI.update_endpoint(endpoint, %{temperature: 99})
+        PhoenixKitAI.update_endpoint(
+          endpoint,
+          %{temperature: 99},
+          actor_uuid: actor,
+          actor_role: "admin"
+        )
 
-      refute_activity_logged("endpoint.updated", resource_uuid: endpoint.uuid)
+      assert_activity_logged(
+        "endpoint.updated",
+        resource_uuid: endpoint.uuid,
+        actor_uuid: actor,
+        metadata_has: %{
+          "name" => endpoint.name,
+          "actor_role" => "admin",
+          "db_pending" => true,
+          "error_keys" => ["temperature"]
+        }
+      )
+
+      # Toggle log still fires only on actual flip; failed update doesn't
+      # change `enabled`, so toggle stays silent.
       refute_activity_logged("endpoint.enabled", resource_uuid: endpoint.uuid)
       refute_activity_logged("endpoint.disabled", resource_uuid: endpoint.uuid)
+    end
+
+    test "failed create emits a `db_pending` audit row" do
+      actor = Ecto.UUID.generate()
+
+      {:error, _changeset} =
+        PhoenixKitAI.create_endpoint(
+          # Missing required `name` triggers the validation failure.
+          %{provider: "openrouter", model: "a/b"},
+          actor_uuid: actor,
+          actor_role: "admin"
+        )
+
+      assert_activity_logged(
+        "endpoint.created",
+        actor_uuid: actor,
+        metadata_has: %{
+          "actor_role" => "admin",
+          "db_pending" => true,
+          "error_keys" => ["name"]
+        }
+      )
     end
   end
 
@@ -194,6 +252,59 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
 
       assert_activity_logged("prompt.deleted", resource_uuid: prompt.uuid)
     end
+
+    test "failed prompt create emits a `db_pending` audit row" do
+      actor = Ecto.UUID.generate()
+
+      {:error, _changeset} =
+        PhoenixKitAI.create_prompt(
+          # Missing required `name` triggers validation failure.
+          %{content: "Hello"},
+          actor_uuid: actor,
+          actor_role: "admin"
+        )
+
+      assert_activity_logged(
+        "prompt.created",
+        actor_uuid: actor,
+        metadata_has: %{
+          "actor_role" => "admin",
+          "db_pending" => true,
+          "error_keys" => ["name"]
+        }
+      )
+    end
+
+    test "failed prompt update emits a `db_pending` audit row with error_keys" do
+      actor = Ecto.UUID.generate()
+
+      {:ok, prompt} =
+        PhoenixKitAI.create_prompt(
+          %{name: "FailUpdate-#{System.unique_integer([:positive])}", content: "Hi"},
+          actor_uuid: actor,
+          actor_role: "admin"
+        )
+
+      {:error, _changeset} =
+        PhoenixKitAI.update_prompt(
+          prompt,
+          # Empty `name` triggers `validate_required(:name)` rejection.
+          %{name: ""},
+          actor_uuid: actor,
+          actor_role: "admin"
+        )
+
+      assert_activity_logged(
+        "prompt.updated",
+        resource_uuid: prompt.uuid,
+        actor_uuid: actor,
+        metadata_has: %{
+          "actor_role" => "admin",
+          "db_pending" => true,
+          "error_keys" => ["name"]
+        }
+      )
+    end
   end
 
   describe "actor metadata defaults" do
@@ -202,7 +313,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "No Actor",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       row =
@@ -216,7 +328,8 @@ defmodule PhoenixKitAI.ActivityLoggingTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Default Role",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       assert_activity_logged("endpoint.created",

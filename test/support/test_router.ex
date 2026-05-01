@@ -24,7 +24,9 @@ defmodule PhoenixKitAI.Test.Router do
   scope "/en/admin/ai", PhoenixKitAI.Web do
     pipe_through(:browser)
 
-    live_session :ai_test, layout: {PhoenixKitAI.Test.Layouts, :app} do
+    live_session :ai_test,
+      layout: {PhoenixKitAI.Test.Layouts, :app},
+      on_mount: {PhoenixKitAI.Test.Hooks, :assign_scope} do
       live("/", Endpoints, :index, as: :ai_index)
       live("/endpoints", Endpoints, :endpoints, as: :ai_endpoints)
       live("/endpoints/new", EndpointForm, :new, as: :ai_endpoint_new)

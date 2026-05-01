@@ -87,4 +87,39 @@ defmodule PhoenixKitAI.Web.PromptsCoverageTest do
       assert is_binary(render(view))
     end
   end
+
+  describe "actor_opts / admin? without an injected scope" do
+    test "delete_prompt without put_test_scope hits the no-scope actor_opts branch",
+         %{conn: conn} do
+      # Pin `actor_opts` `_ -> [actor_role: role]` (line 264) and
+      # `admin?` `nil -> false` (line 270) — the no-scope branches
+      # of both helpers. Exercised by NOT calling `put_test_scope`
+      # in the test (so `socket.assigns[:phoenix_kit_current_scope]`
+      # is nil and `socket.assigns[:phoenix_kit_current_user]` is
+      # also nil).
+      prompt = fixture_prompt()
+      {:ok, view, _html} = live(conn, "/en/admin/ai/prompts")
+
+      view
+      |> element("button[phx-click='delete_prompt'][phx-value-uuid='#{prompt.uuid}']")
+      |> render_click()
+
+      assert PhoenixKitAI.get_prompt(prompt.uuid) == nil
+    end
+  end
+
+  describe "URL params — empty / non-binary page" do
+    test "page=empty falls through to 1", %{conn: conn} do
+      # Drive `parse_page("") -> 1` branch.
+      {:ok, _view, html} = live(conn, "/en/admin/ai/prompts?page=")
+      assert is_binary(html)
+    end
+
+    test "non-numeric page param falls back to 1", %{conn: conn} do
+      # Drive `parse_page(p) when is_binary(p)` → Integer.parse fails →
+      # `_ -> 1` clause.
+      {:ok, _view, html} = live(conn, "/en/admin/ai/prompts?page=abc")
+      assert is_binary(html)
+    end
+  end
 end

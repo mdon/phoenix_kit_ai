@@ -15,10 +15,18 @@ defmodule PhoenixKitAI.Endpoint do
   ### Provider Configuration
   - `provider`: Integration connection key (e.g. `"openrouter"` or
     `"openrouter:my-key"`). Resolved via `PhoenixKit.Integrations`.
-  - `api_key`: **Deprecated.** Legacy field retained only so pre-Integrations
-    endpoints keep working. New endpoints should leave this blank and set
-    up an OpenRouter connection under Settings → Integrations instead.
-    Will be removed in a future major version.
+  - `api_key`: **Deprecated.** Legacy field retained for pre-Integrations
+    endpoints — `OpenRouterClient.resolve_api_key/2` reads it as a fallback
+    when no `PhoenixKit.Integrations` connection is configured for the
+    endpoint's `provider`. The column is `NOT NULL` in core's V34
+    migration, so for now you must provide a value (an empty string is
+    accepted by the DB but will trigger a per-call `Logger.warning`
+    if no Integrations connection is set up either). The recommended
+    migration path is documented in `AGENTS.md` "Migrating from legacy
+    `endpoint.api_key`" — set up an OpenRouter connection under Settings
+    → Integrations and point `provider` at it; the legacy column then
+    becomes unused. Planned for removal in a future major version once
+    operators have had time to migrate.
   - `base_url`: Optional custom base URL for the provider
   - `provider_settings`: Provider-specific settings (JSON)
     - For OpenRouter: `http_referer`, `x_title` headers
@@ -72,13 +80,14 @@ defmodule PhoenixKitAI.Endpoint do
   @type t :: %__MODULE__{}
 
   @primary_key {:uuid, UUIDv7, autogenerate: true}
-  @valid_providers ~w(openrouter)
+  @valid_providers ~w(openrouter mistral deepseek)
 
   @derive {Jason.Encoder,
            only: [
              :uuid,
              :name,
              :description,
+             :integration_uuid,
              :provider,
              :base_url,
              :provider_settings,
@@ -112,6 +121,20 @@ defmodule PhoenixKitAI.Endpoint do
     field(:description, :string)
 
     # Provider configuration
+    #
+    # `integration_uuid` references a `phoenix_kit_settings` row (the
+    # actual integration connection the user picked). `OpenRouterClient`
+    # resolves credentials by uuid, so renaming the integration on the
+    # admin side doesn't break this endpoint.
+    #
+    # `provider` and `api_key` are legacy. `provider` carried either a
+    # provider-type tag (`"openrouter"`) or, more recently, an integration
+    # uuid stuffed into a string column. Both are now subsumed by
+    # `integration_uuid`. They remain on the schema for the transition
+    # window — the V107 migration backfilled `integration_uuid` from
+    # `provider`, and the legacy api_key column has its own warning path
+    # — but new code paths should ignore them.
+    field(:integration_uuid, :binary_id)
     field(:provider, :string, default: "openrouter")
     field(:api_key, :string)
     field(:base_url, :string)
@@ -165,6 +188,7 @@ defmodule PhoenixKitAI.Endpoint do
     |> cast(attrs, [
       :name,
       :description,
+      :integration_uuid,
       :provider,
       :api_key,
       :base_url,
@@ -198,7 +222,37 @@ defmodule PhoenixKitAI.Endpoint do
     |> validate_reasoning()
     |> maybe_set_default_base_url()
     |> validate_base_url()
+    |> maybe_clear_legacy_api_key()
     |> unique_constraint(:name)
+  end
+
+  # When an endpoint is being linked to an Integrations row (via
+  # `integration_uuid`), clear the legacy `api_key` column in the same
+  # changeset so the write is atomic. Once a user explicitly chooses the
+  # integration as the source of truth, the legacy column should not
+  # silently survive as a stale fallback — it would mask config drift
+  # and rot quietly. The column itself stays in the schema; only the
+  # value is wiped so a manual recovery via direct DB edit is still
+  # possible if something goes catastrophically wrong.
+  #
+  # Cleared to `""` rather than `nil` because the column is `NOT NULL`
+  # (V34 schema). Both the recovery-card render condition
+  # (`api_key && api_key != ""`) and the OpenRouterClient fallback chain
+  # (`maybe_get_credentials("") => {:error, :not_configured}`) treat the
+  # empty string as "no fallback configured" — same semantics as NULL,
+  # without needing a schema relaxation.
+  #
+  # Only fires when the changeset is actually CHANGING `integration_uuid`
+  # to a non-empty value. A no-op edit (saving the form without touching
+  # the integration field) leaves `api_key` alone.
+  defp maybe_clear_legacy_api_key(changeset) do
+    case fetch_change(changeset, :integration_uuid) do
+      {:ok, uuid} when is_binary(uuid) and uuid != "" ->
+        put_change(changeset, :api_key, "")
+
+      _ ->
+        changeset
+    end
   end
 
   @doc """
@@ -211,26 +265,38 @@ defmodule PhoenixKitAI.Endpoint do
   @doc """
   Returns the list of valid provider types.
   """
+  @spec valid_providers() :: [String.t()]
   def valid_providers, do: @valid_providers
 
   @doc """
   Returns provider options for form selects.
   """
+  @spec provider_options() :: [{String.t(), String.t()}]
   def provider_options do
     [
-      {"OpenRouter", "openrouter"}
+      {"OpenRouter", "openrouter"},
+      {"Mistral", "mistral"},
+      {"DeepSeek", "deepseek"}
     ]
   end
 
   @doc """
   Returns the default base URL for a provider.
+
+  All three current providers expose an OpenAI-compatible chat
+  completions endpoint at `<base>/chat/completions`, so the same
+  Completion HTTP layer works for them.
   """
+  @spec default_base_url(String.t()) :: String.t() | nil
   def default_base_url("openrouter"), do: "https://openrouter.ai/api/v1"
+  def default_base_url("mistral"), do: "https://api.mistral.ai/v1"
+  def default_base_url("deepseek"), do: "https://api.deepseek.com/v1"
   def default_base_url(_), do: nil
 
   @doc """
   Masks the API key for display, showing only the last 4 characters.
   """
+  @spec masked_api_key(String.t() | nil) :: String.t()
   def masked_api_key(nil), do: "Not set"
   def masked_api_key(""), do: "Not set"
 
@@ -243,8 +309,20 @@ defmodule PhoenixKitAI.Endpoint do
 
   @doc """
   Returns a display label for the provider.
+
+  Brand names stay un-translated by design — `"OpenRouter"`,
+  `"Mistral"`, `"DeepSeek"` are product trademarks, not user-facing
+  prose. Translating them would produce `"OpenRouter Соединение"` /
+  `"OpenRouter Verbindung"` style mixed strings that read worse
+  than the bilingual label they replace. The surrounding word
+  (`"Connection"` in the form's section header) IS gettext-wrapped
+  separately so the operator's locale picks up the localised
+  connector word; the brand stays the brand.
   """
+  @spec provider_label(String.t()) :: String.t()
   def provider_label("openrouter"), do: "OpenRouter"
+  def provider_label("mistral"), do: "Mistral"
+  def provider_label("deepseek"), do: "DeepSeek"
   def provider_label(provider), do: provider
 
   @doc """

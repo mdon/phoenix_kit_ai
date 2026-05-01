@@ -43,13 +43,23 @@ defmodule PhoenixKitAI.Web.PlaygroundTest do
   end
 
   describe "handle_info catch-all" do
-    test "ignores unrelated PubSub messages without crashing", %{conn: conn} do
+    test "ignores unrelated PubSub messages and logs at :debug", %{conn: conn} do
+      previous_level = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous_level) end)
+
       {:ok, view, _html} = live(conn, "/en/admin/ai/playground")
 
-      send(view.pid, :unknown_msg_from_another_module)
-      send(view.pid, {:something_we_dont_care_about, %{}, %{}})
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          send(view.pid, :unknown_msg_from_another_module)
+          send(view.pid, {:something_we_dont_care_about, %{}, %{}})
 
-      assert is_binary(render(view))
+          html = render(view)
+          assert html =~ "AI Playground"
+        end)
+
+      assert log =~ "[PhoenixKitAI.Web.Playground] unhandled handle_info"
     end
   end
 end

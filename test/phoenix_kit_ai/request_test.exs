@@ -13,6 +13,15 @@ defmodule PhoenixKitAI.RequestTest do
       assert Request.format_cost(0) == "$0.00"
     end
 
+    test "returns $0.00 for negative nanodollars (cond `true` fallback)" do
+      # Pin the `true -> "$0.00"` clause of format_cost/1's cond.
+      # The head `format_cost(0)` short-circuits zero exactly; the
+      # cond's earlier branches all gate on positive thresholds. A
+      # negative integer falls through to the `true` branch.
+      assert Request.format_cost(-1) == "$0.00"
+      assert Request.format_cost(-1_000_000) == "$0.00"
+    end
+
     test "uses 2 decimals for amounts >= $0.01" do
       # 1_000_000 nanodollars = $1.00
       assert Request.format_cost(1_000_000) == "$1.00"
@@ -40,7 +49,8 @@ defmodule PhoenixKitAI.RequestTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Req test endpoint #{System.unique_integer([:positive])}",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       attrs = %{
@@ -74,7 +84,8 @@ defmodule PhoenixKitAI.RequestTest do
         PhoenixKitAI.create_endpoint(%{
           name: "Persist endpoint #{System.unique_integer([:positive])}",
           provider: "openrouter",
-          model: "a/b"
+          model: "a/b",
+          api_key: "sk-test-key"
         })
 
       {:ok, request} =

@@ -195,22 +195,77 @@ defmodule PhoenixKitAI do
   # ACTIVITY LOGGING HELPERS
   # ===========================================
 
-  # Log a successful endpoint mutation. Failures in the primary
-  # operation bypass logging entirely; logging failures never crash the
-  # caller thanks to the rescue.
+  # Log a successful endpoint mutation. The failure-branch row is
+  # written by `log_failed_endpoint_mutation/3` lower down. Together
+  # they ensure the audit feed records every user-initiated mutation
+  # attempt, including ones that failed due to validation, FK
+  # violations, or DB outages. `metadata.db_pending: true`
+  # distinguishes attempted-but-failed from completed actions.
   defp log_endpoint_activity({:ok, endpoint} = result, action, opts) do
-    log_activity(action, endpoint, "endpoint", opts, %{"name" => endpoint.name})
+    log_activity(action, "endpoint", endpoint.uuid, opts, %{"name" => endpoint.name})
     result
   end
 
   defp log_endpoint_activity(error, _action, _opts), do: error
 
   defp log_prompt_activity({:ok, prompt} = result, action, opts) do
-    log_activity(action, prompt, "prompt", opts, %{"name" => prompt.name})
+    log_activity(action, "prompt", prompt.uuid, opts, %{"name" => prompt.name})
     result
   end
 
   defp log_prompt_activity(error, _action, _opts), do: error
+
+  # Failure-branch audit row. Writes `metadata.db_pending: true` plus
+  # the validation `error_keys` so the audit feed can distinguish
+  # attempted-but-failed from completed mutations. Returns the result
+  # unchanged so callers can continue piping. No-op on `{:ok, _}`.
+  defp log_failed_endpoint_mutation(
+         {:error, %Ecto.Changeset{} = changeset} = result,
+         action,
+         opts
+       ) do
+    log_activity(
+      action,
+      "endpoint",
+      Map.get(changeset.data, :uuid),
+      opts,
+      failure_metadata(changeset, :name)
+    )
+
+    result
+  end
+
+  defp log_failed_endpoint_mutation(result, _action, _opts), do: result
+
+  defp log_failed_prompt_mutation(
+         {:error, %Ecto.Changeset{} = changeset} = result,
+         action,
+         opts
+       ) do
+    log_activity(
+      action,
+      "prompt",
+      Map.get(changeset.data, :uuid),
+      opts,
+      failure_metadata(changeset, :name)
+    )
+
+    result
+  end
+
+  defp log_failed_prompt_mutation(result, _action, _opts), do: result
+
+  # PII-safe failure metadata — `name` is the only changeset field we
+  # surface (the resource's display string, already public in the admin
+  # UI); `error_keys` is the list of failed validation keys, never the
+  # rejected values themselves.
+  defp failure_metadata(changeset, name_field) do
+    %{
+      "name" => Ecto.Changeset.get_field(changeset, name_field),
+      "db_pending" => true,
+      "error_keys" => changeset.errors |> Keyword.keys() |> Enum.map(&Atom.to_string/1)
+    }
+  end
 
   # Enable/disable toggle — logs only when the flag actually changes.
   defp maybe_log_endpoint_toggle({:ok, endpoint} = result, was_enabled, opts) do
@@ -234,7 +289,7 @@ defmodule PhoenixKitAI do
   defp maybe_log_prompt_toggle(error, _, _), do: error
 
   defp log_toggle(result, action, resource, resource_type, opts) do
-    log_activity(action, resource, resource_type, opts, %{"name" => resource.name})
+    log_activity(action, resource_type, resource.uuid, opts, %{"name" => resource.name})
     result
   end
 
@@ -246,7 +301,7 @@ defmodule PhoenixKitAI do
   # run the core PhoenixKit migrations yet simply don't have the
   # `phoenix_kit_activities` table, so logging would be noise on every
   # mutation. Any other failure is logged so real bugs aren't hidden.
-  defp log_activity(action, resource, resource_type, opts, extra) do
+  defp log_activity(action, resource_type, resource_uuid, opts, extra) do
     if Code.ensure_loaded?(PhoenixKit.Activity) do
       metadata =
         %{"actor_role" => Keyword.get(opts, :actor_role, "user")}
@@ -258,7 +313,7 @@ defmodule PhoenixKitAI do
         mode: Keyword.get(opts, :mode, "manual"),
         actor_uuid: Keyword.get(opts, :actor_uuid),
         resource_type: resource_type,
-        resource_uuid: resource.uuid,
+        resource_uuid: resource_uuid,
         metadata: metadata
       })
     end
@@ -322,6 +377,455 @@ defmodule PhoenixKitAI do
   @spec disable_system() :: {:ok, term()} | {:error, term()}
   def disable_system do
     Settings.update_boolean_setting_with_module("ai_enabled", false, module_key())
+  end
+
+  @doc """
+  One-shot auto-migrator for legacy `endpoint.api_key` values into
+  `PhoenixKit.Integrations` connections.
+
+  Mirrors the pattern of `PhoenixKit.Integrations.run_legacy_migrations/0`
+  — call it at host-app boot to fold pre-Integrations endpoint api_keys
+  into the named-connection model. Safe to call multiple times:
+  multiple idempotency guards short-circuit on already-migrated state.
+
+  ## What it does
+
+  For each `phoenix_kit_ai_endpoints` row whose `provider` is the bare
+  string `"openrouter"` (i.e., NOT already pointing at a named
+  Integrations connection like `"openrouter:my-key"`) AND whose
+  `api_key` is non-empty:
+
+  1. Group by api_key value — endpoints sharing a key share one
+     connection (dedup).
+  2. Create a `PhoenixKit.Integrations` connection per distinct key.
+     Naming: `"openrouter:default"` if there's exactly one key in the
+     deployment; `"openrouter:imported-1"`, `"openrouter:imported-2"`
+     (1-indexed by first-seen order) if there are multiple.
+  3. Update each endpoint's `provider` field to point at the new
+     connection key (e.g., `"openrouter:default"`).
+
+  The legacy `api_key` column is NEVER cleared — it stays on each row
+  as a safety net. `OpenRouterClient.resolve_api_key/2` prefers
+  Integrations, so post-migration endpoints stop firing the legacy
+  warning; if Integrations later breaks for any reason, the column
+  still has the value and the fallback path keeps working.
+
+  ## Idempotency guards (any one short-circuits)
+
+  - The `ai_legacy_api_key_migration_completed_at` setting is set →
+    already ran, skip.
+  - ANY `integration:openrouter:*` key already exists in
+    `phoenix_kit_settings` (operator already set up Integrations
+    manually) → mark completed and skip.
+  - NO endpoints have `provider == "openrouter"` with a non-empty
+    `api_key` → nothing to migrate, mark completed.
+
+  ## Failure modes
+
+  Top-level `try/rescue/catch :exit` so DB outages, race conditions,
+  or any unexpected exception NEVER crashes the host app's boot.
+  Per-key-group operations are isolated — one bad group doesn't abort
+  the others. Partial migration is safe because un-migrated endpoints
+  still resolve via the legacy fallback path.
+
+  ## Configuration
+
+  No options. Disable by simply not calling the function.
+  """
+  @spec run_legacy_api_key_migration() :: :ok
+  def run_legacy_api_key_migration do
+    case do_run_legacy_api_key_migration() do
+      :skipped ->
+        :ok
+
+      {:migrated, count} ->
+        require Logger
+
+        Logger.info(
+          "[PhoenixKitAI] Auto-migrated #{count} endpoint(s) from legacy api_key " <>
+            "to PhoenixKit.Integrations connections"
+        )
+
+        :ok
+    end
+  rescue
+    e ->
+      require Logger
+
+      Logger.warning(
+        "[PhoenixKitAI] Legacy api_key migration crashed (host boot continues): " <>
+          Exception.message(e)
+      )
+
+      :ok
+  catch
+    :exit, _reason ->
+      :ok
+  end
+
+  defp do_run_legacy_api_key_migration do
+    cond do
+      not Code.ensure_loaded?(PhoenixKit.Integrations) ->
+        :skipped
+
+      legacy_api_key_migration_completed?() ->
+        :skipped
+
+      any_openrouter_integration_exists?() ->
+        # Operator already set up Integrations manually — record that
+        # we've reached the desired end state and skip future runs.
+        mark_legacy_api_key_migration_complete()
+        :skipped
+
+      true ->
+        attempt_legacy_api_key_migration()
+    end
+  end
+
+  defp legacy_api_key_migration_completed? do
+    Settings.get_setting("ai_legacy_api_key_migration_completed_at", nil) != nil
+  rescue
+    # Settings table missing in this environment — treat as not completed
+    # but the next guard (any_openrouter_integration_exists?) will trip
+    # on the same missing infra and we'll skip safely.
+    _ -> false
+  end
+
+  defp any_openrouter_integration_exists? do
+    query =
+      from(s in "phoenix_kit_settings",
+        where: like(s.key, "integration:openrouter:%"),
+        select: count(s.uuid)
+      )
+
+    repo().one(query) > 0
+  rescue
+    # If the settings table or column shape isn't what we expect, fall
+    # through to "yes, skip" — safer than risking a partial migration
+    # against an unfamiliar schema.
+    _ -> true
+  end
+
+  defp attempt_legacy_api_key_migration do
+    candidates = list_legacy_api_key_endpoints()
+
+    if Enum.empty?(candidates) do
+      mark_legacy_api_key_migration_complete()
+      :skipped
+    else
+      grouped_by_key = Enum.group_by(candidates, & &1.api_key)
+      total_groups = map_size(grouped_by_key)
+
+      migrated_count =
+        grouped_by_key
+        |> Enum.with_index(1)
+        |> Enum.reduce(0, fn {{api_key, endpoints}, index}, acc ->
+          name = legacy_connection_name(total_groups, index)
+          acc + migrate_endpoint_group(name, api_key, endpoints)
+        end)
+
+      mark_legacy_api_key_migration_complete()
+      {:migrated, migrated_count}
+    end
+  end
+
+  defp list_legacy_api_key_endpoints do
+    # Only touch endpoints whose provider is the bare "openrouter"
+    # string. Endpoints already pointing at a named connection (e.g.
+    # "openrouter:my-key") have been migrated by hand or by an earlier
+    # run — leave them alone.
+    query =
+      from(e in Endpoint,
+        where:
+          e.provider == "openrouter" and
+            not is_nil(e.api_key) and
+            e.api_key != "",
+        select: %{uuid: e.uuid, api_key: e.api_key, name: e.name}
+      )
+
+    repo().all(query)
+  rescue
+    _ -> []
+  end
+
+  defp legacy_connection_name(1, _index), do: "default"
+  defp legacy_connection_name(_total, index), do: "imported-#{index}"
+
+  defp migrate_endpoint_group(name, api_key, endpoints) do
+    full_key = "openrouter:#{name}"
+
+    # Two-step write under core's strict-UUID Integrations API:
+    # add_connection/3 creates (or surfaces) the row and returns its
+    # uuid; save_setup/3 then stores the legacy api_key against that
+    # uuid. `:already_exists` on re-runs is fine — fall back to
+    # looking up the existing row's uuid.
+    integration_uuid =
+      case PhoenixKit.Integrations.add_connection("openrouter", name) do
+        {:ok, %{uuid: uuid}} -> uuid
+        {:error, :already_exists} -> lookup_integration_uuid("openrouter", name)
+        _ -> nil
+      end
+
+    cond do
+      is_nil(integration_uuid) ->
+        require Logger
+
+        Logger.warning(
+          "[PhoenixKitAI] Skipping legacy api_key group (#{length(endpoints)} endpoints) — " <>
+            "could not resolve integration uuid"
+        )
+
+        0
+
+      true ->
+        case PhoenixKit.Integrations.save_setup(integration_uuid, %{"api_key" => api_key}) do
+          {:ok, _saved} ->
+            count = update_endpoints_provider(endpoints, full_key, integration_uuid)
+
+            if count > 0 do
+              log_migration_activity(:credentials_migrated, %{
+                "endpoint_count" => count,
+                "integration_uuid" => integration_uuid,
+                "connection_name" => name
+              })
+            end
+
+            count
+
+          {:error, _reason} ->
+            require Logger
+
+            Logger.warning(
+              "[PhoenixKitAI] Skipping legacy api_key group (#{length(endpoints)} endpoints) — " <>
+                "save_setup failed"
+            )
+
+            0
+        end
+    end
+  rescue
+    _ -> 0
+  end
+
+  # Look up the just-created integration row's uuid by scanning
+  # `list_connections/1`. We could use the newer
+  # `Integrations.find_uuid_by_provider_name/1` primitive when
+  # available, but `list_connections/1` has been in core since the
+  # Integrations system shipped — works against any phoenix_kit
+  # version this module's deps allow.
+  defp lookup_integration_uuid(provider, name) do
+    PhoenixKit.Integrations.list_connections(provider)
+    |> Enum.find(fn conn -> conn.name == name end)
+    |> case do
+      %{uuid: uuid} -> uuid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp update_endpoints_provider(endpoints, new_provider, integration_uuid) do
+    uuids = Enum.map(endpoints, & &1.uuid)
+
+    # Atomic write: set the new provider/integration_uuid AND clear
+    # the legacy api_key column in the same UPDATE statement. The
+    # integration row created above (`save_setup`) holds the same
+    # api_key the endpoint had — it's the canonical credential
+    # source now. Keeping a duplicate on the endpoint row would only
+    # rot quietly (admin rotates the integration's key, endpoint's
+    # column drifts) and mask config drift if the integration ever
+    # breaks. Cleared to "" rather than NULL because the column is
+    # NOT NULL (V34); both the runtime fallback chain
+    # (`maybe_get_credentials("") => {:error, :not_configured}`) and
+    # the recovery-card render condition treat "" as "no fallback".
+    set_clause =
+      [provider: new_provider, api_key: "", updated_at: DateTime.utc_now()]
+      |> maybe_add_integration_uuid(integration_uuid)
+
+    {count, _} =
+      from(e in Endpoint, where: e.uuid in ^uuids)
+      |> repo().update_all(set: set_clause)
+
+    count
+  rescue
+    _ -> 0
+  end
+
+  defp maybe_add_integration_uuid(set_clause, nil), do: set_clause
+  defp maybe_add_integration_uuid(set_clause, ""), do: set_clause
+
+  defp maybe_add_integration_uuid(set_clause, uuid) when is_binary(uuid) do
+    Keyword.put(set_clause, :integration_uuid, uuid)
+  end
+
+  defp mark_legacy_api_key_migration_complete do
+    Settings.update_setting_with_module(
+      "ai_legacy_api_key_migration_completed_at",
+      DateTime.utc_now() |> DateTime.to_iso8601(),
+      module_key()
+    )
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  # ===========================================
+  # Combined migrate_legacy/0 callback
+  # ===========================================
+
+  @doc """
+  Combined boot-time migration entry point.
+
+  Runs both legacy data transitions for AI:
+
+  1. **Local api_key → Integrations row + integration_uuid**
+     (delegates to `run_legacy_api_key_migration/0`). Endpoints with
+     bare `provider == "openrouter"` and a non-empty `api_key` get
+     grouped, get an Integration row created, and have both `provider`
+     AND `integration_uuid` updated to point at it.
+
+  2. **`provider`-string → `integration_uuid`** (sweep). Endpoints with
+     `integration_uuid IS NULL` whose `provider` field resolves to a
+     real integration uuid (either bare provider, `provider:name` shape,
+     or a uuid stuffed in the string column from pre-V107 form saves)
+     get their `integration_uuid` populated. V107's migration backfilled
+     most of these at install time; this pass catches stragglers
+     (e.g., endpoints created post-form-update but pre-V107).
+
+  Both kinds log to `PhoenixKit.Activity` per migrated record / group
+  with `mode: "auto"` and module `"ai"`. PII-safe: never logs
+  `api_key` values.
+
+  Idempotent — run on every host-app boot. Designed to be invoked via
+  the orchestrator (`PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0`),
+  but can be called directly for ad-hoc migration runs.
+  """
+  @impl PhoenixKit.Module
+  @spec migrate_legacy() :: {:ok, map()} | {:error, term()}
+  def migrate_legacy do
+    credentials_result = run_legacy_api_key_migration()
+    references_result = sweep_provider_string_to_integration_uuid()
+
+    {:ok,
+     %{
+       credentials_migration: credentials_result,
+       reference_migration: references_result
+     }}
+  rescue
+    e ->
+      require Logger
+
+      Logger.warning(
+        "[PhoenixKitAI] migrate_legacy/0 raised: #{Exception.message(e)}"
+      )
+
+      {:error, e}
+  end
+
+  defp sweep_provider_string_to_integration_uuid do
+    endpoints = list_endpoints_needing_uuid_promotion()
+
+    if Enum.empty?(endpoints) do
+      :nothing_to_migrate
+    else
+      migrated =
+        Enum.reduce(endpoints, 0, fn endpoint, acc ->
+          case promote_provider_to_integration_uuid(endpoint) do
+            :ok -> acc + 1
+            _ -> acc
+          end
+        end)
+
+      if migrated > 0 do
+        log_migration_activity(:reference_migrated, %{
+          "endpoint_count" => migrated,
+          "source" => "boot_sweep"
+        })
+      end
+
+      {:migrated, migrated}
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp list_endpoints_needing_uuid_promotion do
+    # Endpoints with NULL integration_uuid but a provider field that
+    # might resolve. Skip rows whose provider is the bare default
+    # ("openrouter") because credentials migration handles those when
+    # they have an api_key — and a bare provider with no api_key
+    # has nothing to promote to.
+    query =
+      from(e in Endpoint,
+        where:
+          is_nil(e.integration_uuid) and
+            not is_nil(e.provider) and
+            e.provider != "" and
+            e.provider != "openrouter",
+        select: %{uuid: e.uuid, provider: e.provider}
+      )
+
+    repo().all(query)
+  rescue
+    _ -> []
+  end
+
+  defp promote_provider_to_integration_uuid(%{uuid: endpoint_uuid, provider: provider}) do
+    integration_uuid = resolve_provider_to_uuid(provider)
+
+    cond do
+      is_nil(integration_uuid) ->
+        :no_match
+
+      true ->
+        {count, _} =
+          from(e in Endpoint, where: e.uuid == ^endpoint_uuid and is_nil(e.integration_uuid))
+          |> repo().update_all(
+            set: [integration_uuid: integration_uuid, updated_at: DateTime.utc_now()]
+          )
+
+        if count > 0, do: :ok, else: :no_op
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp resolve_provider_to_uuid(provider) when is_binary(provider) do
+    # Delegates to core's dual-input primitive. Previously this helper
+    # carried its own regex + dispatch + provider:name split — a
+    # near-clone of `OpenRouterClient.lookup_uuid_for_provider/1`.
+    # Centralising into `Integrations.resolve_to_uuid/1` removes the
+    # duplication and eliminates the "fourth provider tempts a third
+    # copy-paste" risk.
+    case PhoenixKit.Integrations.resolve_to_uuid(provider) do
+      {:ok, uuid} -> uuid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp resolve_provider_to_uuid(_), do: nil
+
+  defp log_migration_activity(action_atom, metadata) do
+    if Code.ensure_loaded?(PhoenixKit.Activity) do
+      PhoenixKit.Activity.log(%{
+        action: "integration.legacy_migrated",
+        module: module_key(),
+        mode: "auto",
+        resource_type: "endpoint",
+        metadata:
+          Map.merge(metadata, %{
+            "migration_kind" => Atom.to_string(action_atom),
+            "actor_role" => "system"
+          })
+      })
+    end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   @doc """
@@ -695,6 +1199,7 @@ defmodule PhoenixKitAI do
     |> repo().insert()
     |> broadcast_endpoint_change(:endpoint_created)
     |> log_endpoint_activity("endpoint.created", opts)
+    |> log_failed_endpoint_mutation("endpoint.created", opts)
   end
 
   @doc """
@@ -719,6 +1224,7 @@ defmodule PhoenixKitAI do
     |> broadcast_endpoint_change(:endpoint_updated)
     |> maybe_log_endpoint_update(has_changes, opts)
     |> maybe_log_endpoint_toggle(was_enabled, opts)
+    |> log_failed_endpoint_mutation("endpoint.updated", opts)
   end
 
   defp maybe_log_endpoint_update({:ok, _} = result, true, opts) do
@@ -736,6 +1242,7 @@ defmodule PhoenixKitAI do
     repo().delete(endpoint)
     |> broadcast_endpoint_change(:endpoint_deleted)
     |> log_endpoint_activity("endpoint.deleted", opts)
+    |> log_failed_endpoint_mutation("endpoint.deleted", opts)
   end
 
   @doc """
@@ -900,6 +1407,7 @@ defmodule PhoenixKitAI do
     |> repo().insert()
     |> broadcast_prompt_change(:prompt_created)
     |> log_prompt_activity("prompt.created", opts)
+    |> log_failed_prompt_mutation("prompt.created", opts)
   end
 
   @doc """
@@ -921,6 +1429,7 @@ defmodule PhoenixKitAI do
     |> broadcast_prompt_change(:prompt_updated)
     |> maybe_log_prompt_update(has_changes, opts)
     |> maybe_log_prompt_toggle(was_enabled, opts)
+    |> log_failed_prompt_mutation("prompt.updated", opts)
   end
 
   defp maybe_log_prompt_update({:ok, _} = result, true, opts) do
@@ -938,6 +1447,7 @@ defmodule PhoenixKitAI do
     repo().delete(prompt)
     |> broadcast_prompt_change(:prompt_deleted)
     |> log_prompt_activity("prompt.deleted", opts)
+    |> log_failed_prompt_mutation("prompt.deleted", opts)
   end
 
   @doc """
@@ -1845,18 +2355,49 @@ defmodule PhoenixKitAI do
       endpoint.model == nil or endpoint.model == "" ->
         {:error, :endpoint_no_model}
 
-      PhoenixKit.Integrations.get_credentials(endpoint.provider) == {:error, :deleted} ->
-        {:error, :integration_deleted}
-
-      not PhoenixKit.Integrations.connected?(endpoint.provider) ->
-        {:error, :integration_not_configured}
-
       endpoint.enabled == false ->
         {:error, :endpoint_disabled}
 
       true ->
-        {:ok, endpoint}
+        case endpoint_credential_status(endpoint) do
+          :ok -> {:ok, endpoint}
+          {:error, _} = err -> err
+        end
     end
+  end
+
+  # Mirrors the lookup ladder that `OpenRouterClient.resolve_api_key/1`
+  # walks at request time so validation can't disagree with the actual
+  # credential resolution: integration_uuid first, then the legacy
+  # `provider` column (which carried a uuid pre-V107), then the legacy
+  # `api_key` column. Validation only fails when ALL three sources are
+  # empty — same as the request path. The error reason distinguishes
+  # between "you pinned an integration that was deleted" (orphan) and
+  # "you never wired anything up" so the user-facing message is honest.
+  defp endpoint_credential_status(endpoint) do
+    cond do
+      match?({:ok, _}, lookup_credentials(endpoint.integration_uuid)) ->
+        :ok
+
+      match?({:ok, _}, lookup_credentials(endpoint.provider)) ->
+        :ok
+
+      is_binary(endpoint.api_key) and endpoint.api_key != "" ->
+        :ok
+
+      is_binary(endpoint.integration_uuid) and endpoint.integration_uuid != "" ->
+        {:error, :integration_deleted}
+
+      true ->
+        {:error, :integration_not_configured}
+    end
+  end
+
+  defp lookup_credentials(nil), do: {:error, :not_configured}
+  defp lookup_credentials(""), do: {:error, :not_configured}
+
+  defp lookup_credentials(key) when is_binary(key) do
+    PhoenixKit.Integrations.get_credentials(key)
   end
 
   defp merge_endpoint_opts(endpoint, opts) do
@@ -1987,6 +2528,17 @@ defmodule PhoenixKitAI do
         _ -> nil
       end
 
+    # Reasoning models (DeepSeek-R1, Mistral Magistral, OpenAI o-series,
+    # Anthropic extended thinking) return the chain-of-thought alongside
+    # the final answer in a `reasoning` / `reasoning_content` /
+    # `thinking` field. Capture it next to `response` so the request
+    # detail page can surface it later — currently dropped on the floor
+    # when only `content` is extracted. Subject to the same
+    # `capture_request_content?` gate as `response` (see below) — when
+    # content capture is off, reasoning is dropped too. Reasoning can
+    # contain anything the prompt mentioned, so it's PII-equivalent.
+    response_reasoning = Completion.extract_reasoning(response)
+
     # User-content persistence is opt-out. Default `true` preserves the
     # debugging shape we've shipped so far; deployments with PII or
     # data-retention obligations can flip it off via
@@ -2016,6 +2568,7 @@ defmodule PhoenixKitAI do
         Map.merge(base_metadata, %{
           messages: normalized,
           response: response_content,
+          response_reasoning: response_reasoning,
           request_payload: request_payload
         })
       else

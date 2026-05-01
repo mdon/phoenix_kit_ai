@@ -54,6 +54,41 @@ defmodule PhoenixKitAI.LiveCase do
   end
 
   @doc """
+  Build a fake scope struct for tests that need an authenticated actor.
+
+  The returned scope mirrors the production shape (`%PhoenixKit.Users.Auth.Scope{}`
+  with a real `%User{}` struct) so the LV's `actor_opts/1` matches on
+  `phoenix_kit_current_user.uuid` and threads `actor_uuid:` through to
+  the activity log.
+
+  ## Example
+
+      conn = put_test_scope(build_conn(), fake_scope())
+      {:ok, view, _} = live(conn, "/en/admin/ai/endpoints")
+  """
+  def fake_scope(opts \\ []) do
+    user_uuid = Keyword.get(opts, :user_uuid, Ecto.UUID.generate())
+    email = Keyword.get(opts, :email, "test-#{System.unique_integer([:positive])}@example.com")
+
+    user = %{uuid: user_uuid, email: email}
+
+    %{
+      user: user,
+      authenticated?: true,
+      cached_roles: ["Owner", "Admin"]
+    }
+  end
+
+  @doc """
+  Plugs a fake scope into the test conn's session so the
+  `:assign_scope` `on_mount` hook can put it on socket assigns at
+  mount time. Pair with `fake_scope/1`.
+  """
+  def put_test_scope(conn, scope) do
+    Plug.Test.init_test_session(conn, %{"phoenix_kit_test_scope" => scope})
+  end
+
+  @doc """
   Insert a minimal endpoint for tests that just need a resource to
   point at. `name` is randomised to avoid unique-constraint collisions
   across parallel tests. Accepts a map or keyword list of overrides.

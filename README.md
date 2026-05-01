@@ -1,27 +1,35 @@
 # PhoenixKitAI
 
 AI module for PhoenixKit — provides endpoint management, prompt templates,
-completions via OpenRouter, and usage tracking. Implements the
-`PhoenixKit.Module` behaviour for auto-discovery by a parent Phoenix
-application.
+completions, and usage tracking via three OpenAI-compatible providers
+(OpenRouter, Mistral, DeepSeek). Implements the `PhoenixKit.Module`
+behaviour for auto-discovery by a parent Phoenix application.
 
 ## Features
 
 - **Endpoint Management** — Unified configuration combining provider
-  credentials, model selection, and generation parameters
+  credentials, model selection, and generation parameters across three
+  built-in providers (OpenRouter, Mistral, DeepSeek)
 - **Prompt Templates** — Reusable prompts with `{{Variable}}` substitution
   syntax, live preview, and variable validation
 - **Completions API** — Single-turn (`ask/3`), multi-turn (`complete/3`),
   and embeddings (`embed/3`)
+- **Reasoning capture** — Chain-of-thought from reasoning models
+  (DeepSeek-R1, Mistral Magistral, OpenAI o-series, Anthropic extended
+  thinking) automatically persisted to request metadata
 - **Usage Tracking** — Every API call logged with tokens, cost
   (nanodollars), latency, status, and full caller context
 - **Admin UI** — LiveView pages for Endpoints, Prompts, Usage, and a live
   Playground
+- **Dynamic model selector** — Models auto-load from each provider's
+  `/models` endpoint when an integration is picked, with a 10-second
+  "still loading" hint and a retry button on transient failures
 - **Real-time Updates** — PubSub broadcasts for endpoint/prompt/request
   changes
 - **Integrations-backed credentials** — API keys resolved via
-  `PhoenixKit.Integrations` (OpenRouter connection), not stored per
-  endpoint
+  `PhoenixKit.Integrations`, not stored per endpoint. Each endpoint
+  pins to a specific connection by uuid; the picker filters to the
+  current provider
 
 ## Quick start
 
@@ -37,7 +45,9 @@ Run `mix deps.get` and start the server. The module appears in:
   and Usage
 - **Admin → Modules** — toggle on/off
 - **Admin → Roles** — grant/revoke access per role
-- **Admin → Settings → Integrations** — set up the OpenRouter connection
+- **Admin → Settings → Integrations** — set up at least one provider
+  connection (OpenRouter, Mistral, or DeepSeek). The endpoint form's
+  picker filters to whichever provider is selected on the dropdown.
 
 ## Installation
 
@@ -120,6 +130,45 @@ usage = PhoenixKitAI.extract_usage(response)
 response["latency_ms"] # => 850
 ```
 
+### Reasoning models — chain-of-thought capture
+
+Reasoning models (DeepSeek-R1, Mistral Magistral, OpenAI o-series,
+Anthropic extended thinking) return their chain-of-thought alongside
+the final answer in a per-provider field on the assistant message.
+PhoenixKitAI normalizes the three known shapes and persists the trace
+into request metadata so operators can inspect it from the admin
+Usage page (collapsed by default — chains-of-thought routinely run
+5-50× the length of the answer).
+
+```elixir
+{:ok, response} = PhoenixKitAI.complete(endpoint.uuid, [
+  %{role: "user", content: "If a train leaves Chicago at 2pm..."}
+])
+
+# Final answer
+{:ok, answer} = PhoenixKitAI.extract_content(response)
+
+# Chain-of-thought (if the model produced one)
+PhoenixKitAI.Completion.extract_reasoning(response)
+# => "Step 1: identify the variables...\nStep 2: ..."
+# => nil when the model isn't a reasoning model
+```
+
+Field-name normalization (handled internally; you don't need to know
+which shape your provider uses):
+
+| Provider / response shape | Field on `message` |
+|---|---|
+| OpenRouter and what it proxies | `reasoning` |
+| DeepSeek native API | `reasoning_content` |
+| Some others | `thinking` |
+
+The trace lands in `phoenix_kit_ai_requests.metadata.response_reasoning`.
+Subject to the same `capture_request_content?` privacy gate as
+`response` content (see "Privacy / retention controls" below) — when
+content capture is off, reasoning is dropped too. Reasoning can mirror
+prompt content and is PII-equivalent.
+
 ## Prompt templates
 
 Prompts are reusable templates with `{{VariableName}}` substitution.
@@ -147,12 +196,30 @@ Other helpers: `get_prompt_variables/1`, `preview_prompt/2`,
 ## Endpoint management
 
 ```elixir
-# Create
+# Create — OpenRouter
 {:ok, endpoint} = PhoenixKitAI.create_endpoint(%{
   name: "Claude Fast",
-  provider: "openrouter",        # integration connection key
+  provider: "openrouter",          # provider key (see Supported providers)
+  integration_uuid: integration.uuid,
   model: "anthropic/claude-3-haiku",
   temperature: 0.7
+})
+
+# Create — Mistral. base_url defaults to https://api.mistral.ai/v1
+# via Endpoint.default_base_url/1; model id is provider-native.
+{:ok, ep} = PhoenixKitAI.create_endpoint(%{
+  name: "Mistral Large",
+  provider: "mistral",
+  integration_uuid: mistral_integration.uuid,
+  model: "mistral-large-latest"
+})
+
+# Create — DeepSeek
+{:ok, ep} = PhoenixKitAI.create_endpoint(%{
+  name: "DeepSeek Reasoner",
+  provider: "deepseek",
+  integration_uuid: deepseek_integration.uuid,
+  model: "deepseek-reasoner"       # reasoning model — chain-of-thought captured
 })
 
 # List with filters and sorting
@@ -169,11 +236,22 @@ PhoenixKitAI.list_endpoints(
 {:ok, _}       = PhoenixKitAI.delete_endpoint(endpoint)
 ```
 
-> **API keys are managed via Integrations.** New endpoints should leave
-> `api_key` blank and point `provider` at an OpenRouter connection
-> (default key `"openrouter"`). The legacy `api_key` field is still read
-> for pre-Integrations rows — see [Migrating from legacy
-> `endpoint.api_key`](#migrating-from-legacy-endpointapi_key).
+> **API keys are managed via Integrations.** Each endpoint references a
+> specific `PhoenixKit.Integrations` connection by uuid via the
+> `integration_uuid` column (added in core's V107 with backfill from
+> existing `provider` strings). The picker on the endpoint form writes
+> the chosen connection's uuid; `OpenRouterClient.resolve_api_key/1`
+> looks up credentials by uuid at request time — no per-provider
+> guessing. After a successful migration (manual save with an
+> integration picked, or `migrate_legacy/0` at boot), the legacy
+> `api_key` column is atomically wiped to `""` so the credential lives
+> in exactly one place. The column itself stays in the schema (it's
+> `NOT NULL` in core's V34, so the value must be a string — empty
+> string represents "cleared") so a manual DB recovery is still
+> possible if catastrophe strikes; planned for removal in a future
+> major version.
+> See [Migrating from legacy `endpoint.api_key`](#migrating-from-legacy-endpointapi_key)
+> for the recommended workflow and the boot-time auto-migrator.
 
 ## Source tracking & debugging
 
@@ -185,6 +263,8 @@ Every request automatically captures:
 - **Stacktrace** — up to 20 frames.
 - **Caller context** — `request_id` (Phoenix Logger metadata), `node`,
   `pid`.
+- **Message + response content** — full user message list and assistant
+  response text. Default-on; controllable via the config flag below.
 - **Memory snapshot** (opt-in) — enable with
   `config :phoenix_kit_ai, :capture_request_memory, true` when you need
   per-request memory data; off by default to keep JSONB metadata small.
@@ -192,26 +272,126 @@ Every request automatically captures:
 All of this is stored in `phoenix_kit_ai_requests.metadata` (JSONB) and
 surfaced in the admin Usage page's request-details modal.
 
+### Privacy / retention controls
+
+```elixir
+# config/config.exs (defaults shown)
+config :phoenix_kit_ai,
+  # Persist user message + assistant response content in request
+  # metadata. Default `true` matches the shipped debugging shape.
+  # Set to `false` for deployments with PII / data-retention
+  # obligations — token counts, latency, model, and cost are still
+  # recorded; only the user-supplied strings get redacted (replaced
+  # with `metadata.content_redacted: true`).
+  capture_request_content: true,
+
+  # Capture process memory in request `caller_context` (default off).
+  capture_request_memory: false,
+
+  # Bypass SSRF guard on `Endpoint.base_url` — required for
+  # self-hosted Ollama / intranet inference. Off by default; the
+  # guard rejects loopback / RFC1918 / link-local / `*.local` /
+  # non-http(s) URLs unless this is enabled.
+  allow_internal_endpoint_urls: false
+```
+
 ## Migrating from legacy `endpoint.api_key`
 
-Endpoints created before the Integrations migration stored the OpenRouter
-API key directly in the `api_key` column. New endpoints leave that
-column blank and point `provider` at a `PhoenixKit.Integrations`
-connection key instead (e.g. `"openrouter"`).
+Endpoints created before V107 / the Integrations migration stored the
+OpenRouter API key directly in the `api_key` column and used the bare
+`provider` field (`"openrouter"`) without a specific connection
+reference. V107's backfill stamps `integration_uuid` for any endpoint
+whose `provider` matches a `PhoenixKit.Integrations` row. Endpoints
+that can't be auto-resolved keep working via the legacy `api_key`
+column with a deprecation warning per request — until they're
+migrated, at which point the column is atomically wiped.
 
-When `OpenRouterClient.resolve_api_key/2` falls back to the legacy
-column, it emits a `Logger.warning` identifying the endpoint so the
-warning is actionable. To clear it:
+The recommended workflow is to point each endpoint at a specific
+integration connection via the form's `integration_picker`. The
+endpoint changeset clears the legacy column to `""` in the same
+DB transaction (`Endpoint.maybe_clear_legacy_api_key/1`), so once
+migrated the credential lives only in the integration row.
+
+Stuck endpoints (`api_key` populated, `integration_uuid` still NULL —
+e.g., when V107 couldn't match anything and the boot-time migrator
+hasn't reached this endpoint) get a "Legacy API key (recovery)" card
+on the edit form, with a copy button so the operator can paste the
+key into a new Integration without bouncing back to OpenRouter. The
+card disappears once an integration is selected and saved.
+
+### Manual workflow (per-endpoint)
 
 1. Open **Settings → Integrations** and add an OpenRouter connection if
    one doesn't exist.
 2. Edit the endpoint and select that connection from the
    `integration_picker`.
-3. Save.
+3. Save. The legacy warning stops firing on the next request.
 
-The `api_key` column is retained so pre-migration deployments keep
-working without forced downtime, and is flagged **Deprecated** in
-`PhoenixKitAI.Endpoint` — planned for removal in a future major version.
+### Boot-time auto-migrator
+
+The recommended entry point is the orchestrator
+`PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0`. Call it once from
+your host app's `Application.start/2`; it walks every registered
+PhoenixKit module and invokes its `migrate_legacy/0` callback (idempotent
+per module, never crashes the boot):
+
+```elixir
+def start(_type, _args) do
+  children = [...]
+  result = Supervisor.start_link(children, opts)
+
+  # One call. Walks all modules. Per-module errors caught + logged.
+  PhoenixKit.ModuleRegistry.run_all_legacy_migrations()
+
+  result
+end
+```
+
+For AI specifically, `PhoenixKitAI.migrate_legacy/0` (the callback)
+runs both kinds of legacy data migration: the api_key→Integrations
+credentials migration AND the provider-string→integration_uuid reference
+sweep. Both emit `PhoenixKit.Activity` entries (`action:
+"integration.legacy_migrated"`) with PII-safe metadata so operators can
+audit migrations from the activity feed.
+
+Behaviour:
+
+- Targets endpoints with `provider == "openrouter"` (the bare default —
+  named connections like `"openrouter:my-key"` are NEVER touched) AND a
+  non-empty `api_key`.
+- Groups by `api_key` value (endpoints sharing a key share one
+  connection — dedup).
+- Creates one Integrations connection per distinct key. Naming:
+  `"openrouter:default"` for single-key deployments;
+  `"openrouter:imported-1"` / `"imported-2"` / etc. for multi-key.
+- Updates each endpoint's `provider` string AND `integration_uuid`
+  to point at the new connection — atomically, in a single
+  `Repo.update_all`.
+- **Clears the legacy `api_key` column atomically with the linking**
+  (set to `""`). The credential lives in exactly one place after
+  migration; the runtime resolver takes the `integration_uuid` path,
+  and a broken integration surfaces a loud error rather than silently
+  coasting on a stale duplicate key.
+- *Un*-migrated endpoints (skipped by the where-clause filter, or by
+  one of the idempotency gates) keep their `api_key` populated as a
+  safety-net fallback until they're explicitly handled — either via
+  the manual UI workflow or a re-run of the auto-migrator after the
+  blocking condition clears.
+
+Idempotency guards (any one short-circuits): completion-flag setting,
+existing `integration:openrouter:*` key in `phoenix_kit_settings`, no
+endpoints needing migration. Failure modes are contained — top-level
+`try/rescue/catch :exit` shell ensures the migration NEVER crashes the
+host-app boot.
+
+The migration is opt-in (you must call the function explicitly).
+Operators who prefer the manual UI workflow can simply not call it —
+the resolver's legacy fallback path keeps existing endpoints working
+indefinitely.
+
+The `api_key` column itself is flagged **Deprecated** in
+`PhoenixKitAI.Endpoint` and is planned for removal in a future major
+version.
 
 ### Legacy `raw_response` metadata
 
@@ -326,12 +506,22 @@ lib/
 test/
   phoenix_kit_ai_test.exs              # Behaviour compliance tests
   phoenix_kit_ai/
-    completion_test.exs                # HTTP + error parsing
-    endpoint_test.exs                  # Schema + CRUD
+    completion_test.exs                # HTTP + error parsing (unit)
+    completion_coverage_test.exs       # Req.Test-stubbed integration tests
+    endpoint_test.exs                  # Schema + CRUD + SSRF guard
     errors_test.exs                    # Atom → message mapping
-    openrouter_client_test.exs         # API key + model discovery
+    openrouter_client_test.exs         # API key + model discovery (unit)
+    openrouter_client_coverage_test.exs# Req.Test-stubbed integration tests
     prompt_test.exs                    # Variable extraction + changeset
+    prompt_changeset_test.exs          # Persistence + uniqueness
     request_test.exs                   # Schema + format_cost
+    coverage_test.exs                  # Top-level public API integration
+    schema_coverage_test.exs           # Schema-level edge cases
+    activity_logging_test.exs          # Per-action activity log assertions
+    legacy_api_key_migration_test.exs  # Auto-migrator (idempotency + dedup)
+    destructive_rescue_test.exs        # DROP-TABLE-in-sandbox rescue tests
+    web/                               # LiveView smoke + coverage tests
+  support/                             # Test infra (DataCase, LiveCase, etc.)
 ```
 
 ## Database tables
@@ -358,10 +548,49 @@ migrations of its own.
 
 ## Supported providers
 
-Currently supports **OpenRouter** (100+ models from Anthropic, OpenAI,
-Google, Meta, Mistral, and more). Embedding model list is maintained
-in source and extensible via
-`config :phoenix_kit_ai, :embedding_models, [...]`.
+Three OpenAI-compatible providers are wired into the endpoint form. All
+share the same `Completion.chat_completion/3` HTTP path; the form's
+provider dropdown drives the picker filter, default base URL, and
+model-list fetcher.
+
+| Provider | Default base URL | Models endpoint | Notes |
+|---|---|---|---|
+| **OpenRouter** | `https://openrouter.ai/api/v1` | `/models` (~100 aggregated chat models with pricing + modality metadata) | Models grouped by underlying provider (`anthropic`, `openai`, `meta-llama`, etc.). Embedding models served separately — see below |
+| **Mistral** | `https://api.mistral.ai/v1` | `/v1/models` (chat + embedding mixed in one list) | OpenAI-compatible response. Pricing / context-length / modality fields aren't returned; the form renders sparser model cards |
+| **DeepSeek** | `https://api.deepseek.com/v1` | `/models` (chat only — `deepseek-chat`, `deepseek-reasoner`) | OpenAI-compatible. Reasoner models return chain-of-thought (see Reasoning capture above) |
+
+Each provider's connection is set up under **Settings → Integrations**
+(those entries live in core's `PhoenixKit.Integrations.Providers`
+registry). After validation, the picker on the AI endpoint form
+filters connections to whichever provider is currently selected on
+the dropdown; switching providers clears any selected integration and
+resets `base_url` to the new provider's default.
+
+Models auto-load from the chosen provider's `/models` endpoint when
+the integration is picked. Slow fetches (>10s) surface a "still
+loading" hint next to the spinner; failed fetches show a Retry button
+on the error pane so operators can recover from transient upstream
+issues without re-picking the integration.
+
+**Embedding models for OpenRouter** are NOT returned by `/models` —
+OpenRouter proxies embeddings via `POST /api/v1/embeddings` but
+doesn't list them anywhere queryable. The embedding-model dropdown
+for OpenRouter endpoints is backed by a curated list in
+`OpenRouterClient.builtin_embedding_models/0` (last refreshed in
+source); extensible via:
+
+```elixir
+config :phoenix_kit_ai,
+  embedding_models: [
+    %{"id" => "custom/embedding-model", "name" => "Custom",
+      "context_length" => 8192, "dimensions" => 1024,
+      "pricing" => %{"prompt" => 0.00000001, "completion" => 0}}
+  ]
+```
+
+Mistral exposes embedding models in the same `/v1/models` list as
+chat models (`mistral-embed`, `codestral-embed`); operators select
+the right one manually. DeepSeek currently exposes chat models only.
 
 ## PhoenixKit.Module callbacks
 

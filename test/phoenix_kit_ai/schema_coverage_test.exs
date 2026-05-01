@@ -16,7 +16,11 @@ defmodule PhoenixKitAI.SchemaCoverageTest do
     end
 
     test "provider_options/0" do
-      assert [{"OpenRouter", "openrouter"}] = Endpoint.provider_options()
+      opts = Endpoint.provider_options()
+      assert is_list(opts)
+      assert {"OpenRouter", "openrouter"} in opts
+      assert {"Mistral", "mistral"} in opts
+      assert {"DeepSeek", "deepseek"} in opts
     end
 
     test "default_base_url/1 — known + unknown provider" do

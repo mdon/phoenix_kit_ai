@@ -147,49 +147,41 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       socket
       |> assign(:project_title, nil)
       |> assign(:current_path, Routes.path("/admin/ai"))
-      |> assign(:openrouter_connections, [])
+      |> assign(:provider_connections, [])
+      |> assign(:current_provider, "openrouter")
       |> assign(:models, [])
       |> assign(:models_grouped, [])
       |> assign(:models_loading, false)
+      |> assign(:models_loading_slow, false)
+      |> assign(:model_fetch_slow_timer, nil)
       |> assign(:models_error, nil)
       |> assign(:selected_model, nil)
       |> assign(:selected_provider, nil)
       |> assign(:provider_models, [])
       |> assign(:endpoint, nil)
       |> assign(:active_connection, nil)
+      |> assign(:selected_uuids, [])
       |> assign(:integration_connected, false)
       |> assign(:form, to_form(AI.change_endpoint(%Endpoint{})))
       |> assign(:page_title, "AI Endpoint")
-      |> assign(:loaded, false)
+      |> assign(:loaded_id, :unloaded)
 
     {:ok, socket}
   end
 
   defp load_endpoint(socket, nil) do
-    changeset = AI.change_endpoint(%Endpoint{})
-    connections = socket.assigns.openrouter_connections
-
-    # Auto-select if there's exactly one connection
-    {active, connected} =
-      case connections do
-        [%{uuid: uuid}] -> {uuid, Integrations.connected?(uuid)}
-        _ -> {nil, false}
-      end
-
-    socket =
-      socket
-      |> assign(:page_title, "New AI Endpoint")
-      |> assign(:endpoint, nil)
-      |> assign(:form, to_form(changeset))
-      |> assign(:active_connection, active)
-      |> assign(:integration_connected, connected)
-
-    if connected do
-      send(self(), :fetch_models_from_integration)
-      assign(socket, :models_loading, true)
-    else
-      socket
-    end
+    # New endpoint: nothing is pre-selected. The picker reflects the
+    # endpoint's actual state (no integration yet), so the operator
+    # explicitly picks one. Auto-selecting a single available connection
+    # would mask "no integration set" with "an integration is set" and
+    # confuse anyone scanning the form to verify wiring.
+    socket
+    |> assign(:page_title, "New AI Endpoint")
+    |> assign(:endpoint, nil)
+    |> assign(:form, to_form(AI.change_endpoint(%Endpoint{})))
+    |> assign(:active_connection, nil)
+    |> assign(:selected_uuids, [])
+    |> assign(:integration_connected, false)
   end
 
   defp load_endpoint(socket, id) do
@@ -201,24 +193,51 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
       endpoint ->
         changeset = AI.change_endpoint(endpoint)
-        connections = socket.assigns.openrouter_connections
+        connections = socket.assigns.provider_connections
 
-        # Only treat the saved provider as the active connection if it matches
-        # an existing integration UUID. Otherwise leave it nil so the picker
-        # shows either the available connections or the empty state.
-        active =
+        # Resolve the picker's `active_connection` from the endpoint's
+        # `integration_uuid`. Fall back to the legacy `provider` field
+        # (which carried the uuid before the dedicated column existed)
+        # so endpoints that pre-date V107's backfill still light up the
+        # right picker entry.
+        #
+        # The picker reflects the endpoint's actual stored state — it
+        # never auto-picks a connection the endpoint isn't pinned to.
+        # When `integration_uuid` is set but unresolvable, the orphan
+        # uuid flows through `selected_uuids` so the picker renders its
+        # "Integration deleted" warning card. When nothing is pinned,
+        # `active` stays nil and the picker shows no selection — the
+        # operator picks one explicitly.
+        {active, orphaned_integration_uuid} =
           cond do
-            endpoint.provider && Enum.any?(connections, &(&1.uuid == endpoint.provider)) ->
-              endpoint.provider
+            endpoint.integration_uuid &&
+                Enum.any?(connections, &(&1.uuid == endpoint.integration_uuid)) ->
+              {endpoint.integration_uuid, nil}
 
-            match?([_], connections) ->
-              hd(connections).uuid
+            endpoint.integration_uuid ->
+              # Set but unresolvable — surface the orphan.
+              {nil, endpoint.integration_uuid}
+
+            endpoint.provider && Enum.any?(connections, &(&1.uuid == endpoint.provider)) ->
+              {endpoint.provider, nil}
 
             true ->
-              nil
+              {nil, nil}
           end
 
         connected = active && Integrations.connected?(active)
+
+        # `selected_uuids` is what the picker renders as selected.
+        # When `active` resolves cleanly, it's just `[active]`. When
+        # the original integration is deleted, we pass the orphan uuid
+        # so the picker can render its "Integration deleted" warning
+        # alongside the other connection cards.
+        selected_uuids =
+          cond do
+            active -> [active]
+            orphaned_integration_uuid -> [orphaned_integration_uuid]
+            true -> []
+          end
 
         socket =
           socket
@@ -226,12 +245,14 @@ defmodule PhoenixKitAI.Web.EndpointForm do
           |> assign(:endpoint, endpoint)
           |> assign(:form, to_form(changeset))
           |> assign(:active_connection, active)
+          |> assign(:selected_uuids, selected_uuids)
           |> assign(:integration_connected, connected)
+          |> assign(:current_provider, endpoint.provider)
 
         # Load models if integration is connected
         if connected do
           send(self(), :fetch_models_from_integration)
-          assign(socket, :models_loading, true)
+          start_model_fetch_indicators(socket)
         else
           socket
         end
@@ -240,7 +261,14 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @impl true
   def handle_params(params, _url, socket) do
-    if socket.assigns.loaded do
+    # `:loaded_id` tracks which `params["id"]` the LV currently has data
+    # for. `:unloaded` is the initial sentinel set in `mount/3`; `nil`
+    # means "loaded as the new-endpoint form"; a binary UUID means
+    # "loaded for that endpoint". Re-loads only when the id actually
+    # changes — handles the `push_patch` case where the same LV process
+    # is reused across `/endpoints/A/edit` → `/endpoints/B/edit` (no
+    # caller does this today, but cheap to be safe for future routes).
+    if socket.assigns.loaded_id == params["id"] do
       {:noreply, socket}
     else
       handle_initial_params(params, socket)
@@ -252,9 +280,9 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       socket =
         socket
         |> assign(:project_title, Settings.get_project_title())
-        |> assign(:openrouter_connections, Integrations.list_connections("openrouter"))
+        |> assign(:provider_connections, load_all_provider_connections())
         |> load_endpoint(params["id"])
-        |> assign(:loaded, true)
+        |> assign(:loaded_id, params["id"])
 
       {:noreply, socket}
     else
@@ -267,6 +295,13 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @impl true
   def handle_event("validate", %{"endpoint" => params}, socket) do
+    # When the operator changes the provider dropdown, the previously
+    # picked integration is for a different provider — clear it so the
+    # picker doesn't render an off-provider uuid as orphaned. Also nil
+    # out base_url so the changeset's `maybe_set_default_base_url`
+    # picks up the new provider's default URL.
+    {params, socket} = maybe_handle_provider_change(params, socket)
+
     changeset =
       (socket.assigns.endpoint || %Endpoint{})
       |> AI.change_endpoint(params)
@@ -284,6 +319,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       socket
       |> assign(:form, to_form(changeset))
       |> assign(:selected_model, selected_model)
+      |> assign(:current_provider, params["provider"] || socket.assigns[:current_provider])
 
     {:noreply, socket}
   end
@@ -408,9 +444,30 @@ defmodule PhoenixKitAI.Web.EndpointForm do
   end
 
   @impl true
-  def handle_event("select_openrouter_connection", %{"uuid" => uuid}, socket) do
-    # Store the integration UUID in the endpoint's provider field
-    updated_params = Map.put(socket.assigns.form.params, "provider", uuid)
+  def handle_event("select_provider_connection", %{"action" => "deselect"}, socket) do
+    # Clicking the currently-selected card unpicks it. Write nil into
+    # the form params so save/2 persists the unpinning instead of
+    # re-using the last-stamped value.
+    updated_params = Map.put(socket.assigns.form.params, "integration_uuid", nil)
+    form = %{socket.assigns.form | params: updated_params}
+
+    socket =
+      socket
+      |> assign(:form, form)
+      |> assign(:active_connection, nil)
+      |> assign(:selected_uuids, [])
+      |> assign(:integration_connected, false)
+      |> assign(:models, [])
+      |> assign(:models_grouped, [])
+      |> stop_model_fetch_indicators()
+      |> assign(:models_error, nil)
+
+    {:noreply, socket}
+  end
+
+  def handle_event("select_provider_connection", %{"uuid" => uuid}, socket) do
+    # Pin the endpoint to the chosen integration row by uuid.
+    updated_params = Map.put(socket.assigns.form.params, "integration_uuid", uuid)
     form = %{socket.assigns.form | params: updated_params}
 
     connected = Integrations.connected?(uuid)
@@ -419,12 +476,29 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       socket
       |> assign(:form, form)
       |> assign(:active_connection, uuid)
+      |> assign(:selected_uuids, [uuid])
       |> assign(:integration_connected, connected)
 
     # Reload models with new connection
     if connected do
       send(self(), :fetch_models_from_integration)
-      {:noreply, assign(socket, :models_loading, true)}
+      {:noreply, start_model_fetch_indicators(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("retry_model_fetch", _params, socket) do
+    # Re-trigger `:fetch_models_from_integration` after a previous
+    # fetch failed. Surfaced via the retry button on the model picker
+    # error pane so operators don't have to re-pick the integration
+    # to recover from a transient upstream failure (5xx, timeout,
+    # rate-limit). The handler is a no-op if the active integration
+    # isn't connected anymore — same gate as the initial fetch.
+    if socket.assigns[:integration_connected] do
+      send(self(), :fetch_models_from_integration)
+      {:noreply, start_model_fetch_indicators(socket)}
     else
       {:noreply, socket}
     end
@@ -440,13 +514,14 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
     params = Map.put(params, "provider_settings", provider_settings)
 
-    # Use the active connection UUID as the provider (from integration picker)
-    params =
-      if socket.assigns[:active_connection] do
-        Map.put(params, "provider", socket.assigns.active_connection)
-      else
-        params
-      end
+    # Stamp integration_uuid from the picker's current state — a uuid
+    # when one is selected, nil when the operator unpicked (or never
+    # picked one). Always writing means an explicit deselect actually
+    # clears the column on save instead of silently retaining the
+    # previously-stored value. The legacy `provider` column stays at
+    # whatever it was (defaults to "openrouter") — not used for
+    # resolution anymore, just kept until the column is dropped.
+    params = Map.put(params, "integration_uuid", socket.assigns[:active_connection])
 
     # Parse numeric fields and string lists
     params =
@@ -465,32 +540,90 @@ defmodule PhoenixKitAI.Web.EndpointForm do
     save_endpoint(socket, params)
   end
 
+  defp maybe_handle_provider_change(params, socket) do
+    new_provider = params["provider"]
+    current_provider = socket.assigns[:current_provider]
+
+    provider_changed? =
+      is_binary(new_provider) and is_binary(current_provider) and new_provider != current_provider
+
+    if provider_changed? do
+      # Clear the model id too — model strings are provider-shaped
+      # ("anthropic/claude-3-opus" on OpenRouter, "mistral-large-latest"
+      # on Mistral) and a stale id from the previous provider would
+      # silently survive into save if the operator never re-picked.
+      # Use "" rather than nil — the template's `params["model"] ||
+      # @endpoint.model` fallback would otherwise resurface the saved
+      # model (nil is falsy in Elixir, "" is truthy).
+      params =
+        params
+        |> Map.put("base_url", "")
+        |> Map.put("model", "")
+
+      socket =
+        socket
+        |> assign(:active_connection, nil)
+        |> assign(:selected_uuids, [])
+        |> assign(:integration_connected, false)
+        |> assign(:models, [])
+        |> assign(:models_grouped, [])
+        |> assign(:selected_model, nil)
+        |> assign(:selected_provider, nil)
+        |> assign(:provider_models, [])
+        |> stop_model_fetch_indicators()
+        |> assign(:models_error, nil)
+
+      {params, socket}
+    else
+      {params, socket}
+    end
+  end
+
   defp reload_connections(socket) do
-    connections = Integrations.list_connections("openrouter")
+    connections = load_all_provider_connections()
     current_active = socket.assigns[:active_connection]
+    endpoint_uuid = socket.assigns[:endpoint] && socket.assigns.endpoint.integration_uuid
 
-    # Auto-select if only one connection and nothing valid is selected
-    active =
+    {active, orphaned} =
       cond do
-        # Current selection still exists in the list — keep it
+        # Current selection still exists in the list — keep it.
         current_active && Enum.any?(connections, &(&1.uuid == current_active)) ->
-          current_active
+          {current_active, nil}
 
-        # Only one connection — auto-select it
-        length(connections) == 1 ->
-          hd(connections).uuid
+        # Endpoint was originally pinned to a now-deleted integration.
+        # Keep `active` nil so we don't silently switch the endpoint
+        # to a different connection; surface the orphan to the picker.
+        endpoint_uuid && not Enum.any?(connections, &(&1.uuid == endpoint_uuid)) ->
+          {nil, endpoint_uuid}
 
-        # No valid selection — leave nil so picker shows empty state
         true ->
-          nil
+          {nil, nil}
+      end
+
+    selected_uuids =
+      cond do
+        active -> [active]
+        orphaned -> [orphaned]
+        true -> []
       end
 
     connected = active && Integrations.connected?(active)
 
     socket
-    |> assign(:openrouter_connections, connections)
+    |> assign(:provider_connections, connections)
     |> assign(:active_connection, active)
+    |> assign(:selected_uuids, selected_uuids)
     |> assign(:integration_connected, connected)
+  end
+
+  # Loads connections for every AI provider in one shot. The picker
+  # filters client-side via its `provider` attr (matches `data["provider"]`),
+  # so feeding it the union lets a `provider` field change in the form
+  # immediately re-filter the cards without a server round-trip — and
+  # without us having to track which provider the connections are for.
+  defp load_all_provider_connections do
+    Endpoint.valid_providers()
+    |> Enum.flat_map(&Integrations.list_connections/1)
   end
 
   # Normalise a form field value (always a string from HTML) into the
@@ -583,25 +716,50 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @doc false
   # Public for testability. Returns the soft-warning string for an
-  # endpoint whose `provider` points at a disconnected integration AND
-  # has no legacy `api_key` fallback. Returns nil when either branch
-  # of the safety net keeps the endpoint working.
-  def integration_warning(%{provider: provider, api_key: api_key}) do
+  # endpoint whose chosen integration isn't reachable AND has no legacy
+  # `api_key` fallback. Returns nil when any branch of the resolution
+  # ladder keeps the endpoint working at request time. Mirrors the
+  # ladder in `OpenRouterClient.resolve_api_key/1` so the warning can't
+  # disagree with what the next request would actually do.
+  def integration_warning(endpoint) when is_map(endpoint) do
+    integration_uuid = Map.get(endpoint, :integration_uuid)
+    provider = Map.get(endpoint, :provider)
+    api_key = Map.get(endpoint, :api_key)
+
     cond do
-      provider in [nil, ""] ->
+      # Endpoint pinned via integration_uuid — that specific row is
+      # the source of truth, regardless of what the legacy `provider`
+      # column still says.
+      is_binary(integration_uuid) and integration_uuid != "" and
+          Integrations.connected?(integration_uuid) ->
         nil
 
-      Integrations.connected?(provider) ->
-        nil
-
+      # Legacy endpoint with a stored api_key — fallback path still works.
       is_binary(api_key) and api_key != "" ->
-        # Legacy endpoint with a stored key — fallback path still works.
         nil
+
+      # Pinned to an integration that isn't reachable — surface that.
+      is_binary(integration_uuid) and integration_uuid != "" ->
+        gettext(
+          "The selected integration is not connected — requests will fail until you connect it in Settings → Integrations."
+        )
+
+      # No integration_uuid, but the legacy `provider` column may
+      # carry a uuid (pre-V107) or a `provider:name` string. The
+      # dual-input shim handles both shapes.
+      is_binary(provider) and provider != "" ->
+        if Integrations.connected?(provider) do
+          nil
+        else
+          gettext(
+            "The %{provider} integration is not connected — requests will fail until you connect it in Settings → Integrations.",
+            provider: "\"#{provider}\""
+          )
+        end
 
       true ->
         gettext(
-          "The %{provider} integration is not connected — requests will fail until you connect it in Settings → Integrations.",
-          provider: "\"#{provider}\""
+          "No integration configured for this endpoint. Set up the API key in Settings → Integrations."
         )
     end
   end
@@ -647,22 +805,48 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @impl true
   def handle_info(:fetch_models_from_integration, socket) do
-    active_key = socket.assigns[:active_connection] || "openrouter"
+    # All three current providers (OpenRouter, Mistral, DeepSeek)
+    # expose `<base_url>/models` with an OpenAI-compatible
+    # `{"data": [{"id": ...}, ...]}` shape. The fetcher uses the
+    # endpoint's `base_url` to hit the right host, and groups by
+    # the endpoint's `provider` for IDs without a slash (so Mistral's
+    # "mistral-large-latest" and DeepSeek's "deepseek-chat" land in
+    # one group rather than each spawning a one-off group).
+    #
+    # Only fetch for the picker's actual selection. Falling back to
+    # "any openrouter:default connection" silently misled operators
+    # whose integration was named anything other than "default" (and
+    # contradicted the picker's "reflect state, never auto-pick"
+    # policy).
+    active_key = socket.assigns[:active_connection]
 
-    case Integrations.get_credentials(active_key) do
+    case active_key && Integrations.get_credentials(active_key) do
       {:ok, %{"api_key" => api_key}} when is_binary(api_key) and api_key != "" ->
         send(self(), {:fetch_models, api_key})
         {:noreply, socket}
 
       _ ->
-        {:noreply,
-         assign(socket, models_loading: false, models_error: "No OpenRouter API key configured")}
+        socket =
+          socket
+          |> stop_model_fetch_indicators()
+          |> assign(:models_error, "No API key configured")
+
+        {:noreply, socket}
     end
   end
 
   @impl true
   def handle_info({:fetch_models, api_key}, socket) do
-    case OpenRouterClient.fetch_models_grouped(api_key, type: :all) do
+    base_url = current_models_base_url(socket)
+    fallback_provider = socket.assigns[:current_provider]
+
+    fetch_opts = [
+      model_type: :all,
+      base_url: base_url,
+      fallback_provider: fallback_provider
+    ]
+
+    case OpenRouterClient.fetch_models_grouped(api_key, fetch_opts) do
       {:ok, grouped} ->
         # Flatten for easy lookup
         models =
@@ -681,7 +865,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
         socket =
           socket
-          |> assign(:models_loading, false)
+          |> stop_model_fetch_indicators()
           |> assign(:models, models)
           |> assign(:models_grouped, grouped)
           |> assign(:models_error, nil)
@@ -690,12 +874,37 @@ defmodule PhoenixKitAI.Web.EndpointForm do
         {:noreply, socket}
 
       {:error, reason} ->
+        # Log the failure with grep-able context (provider + reason) so
+        # operators can correlate "model dropdown is empty" reports with
+        # upstream API issues. Provider is the form-side selection at
+        # the time of fetch.
+        Logger.warning(fn ->
+          "[PhoenixKitAI.Web.EndpointForm] model fetch failed: " <>
+            "provider=#{inspect(socket.assigns[:current_provider])}, " <>
+            "reason=#{inspect(reason)}"
+        end)
+
         socket =
           socket
-          |> assign(:models_loading, false)
+          |> stop_model_fetch_indicators()
           |> assign(:models_error, PhoenixKitAI.Errors.message(reason))
 
         {:noreply, socket}
+    end
+  end
+
+  # The integration's `/models` fetch is wedged or slow; the picker
+  # spinner has been spinning for 10s. Surface a "still loading" hint
+  # so the operator knows it's not the UI that's stuck — they can
+  # decide to wait or cancel out. The handler is idempotent: if the
+  # actual fetch already completed, models_loading is false and we
+  # leave models_loading_slow false too (no UI change).
+  @impl true
+  def handle_info(:model_fetch_slow, socket) do
+    if socket.assigns[:models_loading] do
+      {:noreply, assign(socket, :models_loading_slow, true)}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -715,6 +924,65 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   defp find_model(models, model_id) do
     Enum.find(models, fn m -> m.id == model_id end)
+  end
+
+  # Sets the loading indicator and schedules a 10s "still loading"
+  # timer. The timer ref is stashed on the socket so the completion
+  # handlers can cancel it. If the fetch completes before 10s, the
+  # timer fires harmlessly into the no-op branch of the slow handler.
+  # If 10s passes first, the spinner gains a "still loading" hint so
+  # the operator knows it's not a wedged UI.
+  defp start_model_fetch_indicators(socket) do
+    cancel_model_fetch_slow_timer(socket)
+
+    timer_ref = Process.send_after(self(), :model_fetch_slow, 10_000)
+
+    socket
+    |> assign(:models_loading, true)
+    |> assign(:models_loading_slow, false)
+    |> assign(:models_error, nil)
+    |> assign(:model_fetch_slow_timer, timer_ref)
+  end
+
+  # Reset path — fetch completed (success or error). Cancels the
+  # 10s timer if still pending and clears all loading-state assigns.
+  defp stop_model_fetch_indicators(socket) do
+    cancel_model_fetch_slow_timer(socket)
+
+    socket
+    |> assign(:models_loading, false)
+    |> assign(:models_loading_slow, false)
+    |> assign(:model_fetch_slow_timer, nil)
+  end
+
+  defp cancel_model_fetch_slow_timer(socket) do
+    case socket.assigns[:model_fetch_slow_timer] do
+      ref when is_reference(ref) -> Process.cancel_timer(ref)
+      _ -> :ok
+    end
+  end
+
+  # Resolves the base URL the model fetcher should hit. Prefers the
+  # endpoint's saved `base_url` (in case the operator overrode it),
+  # falls back to the schema default for the currently-selected
+  # provider, then to OpenRouter's URL as a last resort. This is
+  # what keeps Mistral / DeepSeek model fetches honest — the saved
+  # endpoint may not exist yet on the new-endpoint flow, so we have
+  # to derive from the form-side `current_provider` assign instead.
+  defp current_models_base_url(socket) do
+    endpoint_url = socket.assigns[:endpoint] && socket.assigns.endpoint.base_url
+
+    cond do
+      is_binary(endpoint_url) and endpoint_url != "" ->
+        endpoint_url
+
+      is_binary(socket.assigns[:current_provider]) ->
+        Endpoint.default_base_url(socket.assigns.current_provider) ||
+          OpenRouterClient.base_url()
+
+      true ->
+        OpenRouterClient.base_url()
+    end
   end
 
   @doc """

@@ -11,8 +11,7 @@ config :phoenix_kit_ai, PhoenixKitAI.Test.Repo,
   hostname: System.get_env("PGHOST", "localhost"),
   database: "phoenix_kit_ai_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
-  pool_size: System.schedulers_online() * 2,
-  priv: "test/support/postgres"
+  pool_size: System.schedulers_online() * 2
 
 # Wire repo for PhoenixKit.RepoHelper — without this, all DB calls crash.
 config :phoenix_kit, repo: PhoenixKitAI.Test.Repo

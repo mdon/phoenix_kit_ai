@@ -129,8 +129,113 @@
                       >
                         {endpoint.name}
                       </.link>
+                      <% integration = Map.get(@integrations_by_uuid, endpoint.integration_uuid) %>
+                      <% integration_status = integration && integration.data["status"] %>
                       <.enabled_badge enabled={endpoint.enabled} />
+                      <%!-- Integration health badge — orthogonal to
+                           `enabled`. An endpoint can be enabled but
+                           unable to actually serve requests because
+                           its pinned integration was deleted, never
+                           validated, or hit an auth error. Surfacing
+                           that state stops the list from claiming
+                           "Active" for endpoints that would 401 on
+                           the next request.
+
+                           Failure shapes:
+                           - integration_uuid set but doesn't resolve
+                             → the integration was deleted ("Missing")
+                           - integration_uuid resolves with status
+                             "error" → credentials broken ("Error")
+                           - integration_uuid resolves but status is
+                             not "connected" → never tested or
+                             disconnected ("Not connected")
+                           - integration_uuid is nil → never picked
+                           - status "connected" → no badge (the
+                             enabled badge already conveys "ready") --%>
+                      <%= cond do %>
+                        <% endpoint.integration_uuid && is_nil(integration) -> %>
+                          <span
+                            class="badge badge-error badge-sm"
+                            title={
+                              gettext(
+                                "The pinned integration was deleted. Edit the endpoint and select a new one."
+                              )
+                            }
+                          >
+                            {gettext("Integration missing")}
+                          </span>
+                        <% integration_status == "error" -> %>
+                          <span
+                            class="badge badge-error badge-sm"
+                            title={
+                              gettext(
+                                "The integration's last validation failed. Open it in Settings → Integrations to retest."
+                              )
+                            }
+                          >
+                            {gettext("Integration error")}
+                          </span>
+                        <% integration && integration_status != "connected" -> %>
+                          <span
+                            class="badge badge-warning badge-sm"
+                            title={
+                              gettext(
+                                "The integration is not currently connected. Open it in Settings → Integrations to test."
+                              )
+                            }
+                          >
+                            {gettext("Not connected")}
+                          </span>
+                        <% is_nil(endpoint.integration_uuid) -> %>
+                          <span
+                            class="badge badge-warning badge-sm"
+                            title={gettext("No integration selected. Edit the endpoint to pick one.")}
+                          >
+                            {gettext("No integration")}
+                          </span>
+                        <% true -> %>
+                      <% end %>
                       <span class="badge badge-outline">{endpoint.provider}</span>
+                    </div>
+
+                    <%!-- Integration + masked API key row.
+
+                         Surfaces which integration the endpoint
+                         resolves through and a partial view of the
+                         credential it'd send. Useful at-a-glance for
+                         "is this endpoint pointing where I think
+                         it's pointing?" without opening the edit form.
+
+                         Mask format (`sk-or-v1…abcd`): first 8 + last
+                         4 characters. The OpenRouter prefix stays
+                         recognisable, the suffix differentiates keys
+                         that share a prefix, and the bulk of the
+                         secret is elided. For orphaned endpoints we
+                         show "Integration deleted" + "—" since the
+                         credential lives in the (now gone) integration
+                         row, not on the endpoint anymore. --%>
+                    <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-base-content/60">
+                      <div class="flex items-center gap-1">
+                        <.icon name="hero-link" class="w-3.5 h-3.5" />
+                        <span class="font-medium text-base-content/70">{gettext("Integration:")}</span>
+                        <%= cond do %>
+                          <% integration -> %>
+                            <span>{integration.name}</span>
+                          <% endpoint.integration_uuid -> %>
+                            <span class="text-error">{gettext("Deleted")}</span>
+                          <% true -> %>
+                            <span class="italic">{gettext("none")}</span>
+                        <% end %>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <.icon name="hero-key" class="w-3.5 h-3.5" />
+                        <span class="font-medium text-base-content/70">{gettext("Key:")}</span>
+                        <span class="font-mono">
+                          {if integration,
+                            do: PhoenixKitAI.Web.Endpoints.mask_api_key(integration.data["api_key"]),
+                            else: "—"}
+                        </span>
+                      </div>
                     </div>
 
                     <div class="mt-2 flex flex-wrap gap-4 text-sm text-base-content/70">
@@ -206,6 +311,7 @@
                     <button
                       phx-click="toggle_endpoint"
                       phx-value-uuid={endpoint.uuid}
+                      phx-disable-with={gettext("Updating…")}
                       class="btn btn-xs btn-outline btn-info tooltip tooltip-bottom"
                       data-tip={
                         if endpoint.enabled, do: gettext("Disable"), else: gettext("Enable")
@@ -654,12 +760,12 @@
                             {PhoenixKitAI.Request.status_label(request.status)}
                           </span>
                           <%= if request.error_message do %>
-                            <div class="tooltip" data-tip={request.error_message}>
+                            <span title={request.error_message} class="inline-block align-middle">
                               <.icon
                                 name="hero-information-circle"
                                 class="w-4 h-4 text-error ml-1"
                               />
-                            </div>
+                            </span>
                           <% end %>
                         </td>
                         <%!-- Hidden until xl (accounts for sidebar) --%>
@@ -669,13 +775,24 @@
                         >
                           {request.metadata["source"] || "-"}
                         </td>
-                        <%!-- Always visible --%>
+                        <%!-- Always visible. No daisyUI tooltip — its
+                             absolutely-positioned pseudo-element extends
+                             below the row in layout space and, because
+                             the wrapper uses overflow-x-auto (which the
+                             CSS spec coerces overflow-y to auto from
+                             visible), the row's scrollHeight grows by
+                             ~19px per row and a vertical scrollbar
+                             appears even on a 2-row table. The eye icon
+                             at ≥sm and the "View" text at <sm are
+                             self-documenting; an HTML title attribute
+                             keeps the hover affordance for icon-only
+                             viewports without contributing to layout. --%>
                         <td>
                           <button
                             phx-click="show_request_details"
                             phx-value-uuid={request.uuid}
-                            class="btn btn-xs btn-outline btn-info tooltip tooltip-bottom"
-                            data-tip={gettext("View")}
+                            title={gettext("View")}
+                            class="btn btn-xs btn-outline btn-info"
                           >
                             <.icon name="hero-eye" class="w-4 h-4 hidden sm:inline" />
                             <span class="sm:hidden whitespace-nowrap">{gettext("View")}</span>
@@ -839,6 +956,26 @@
               </div>
             </div>
           </div>
+        <% end %>
+
+        <%!-- Reasoning / chain-of-thought (reasoning models only).
+             Collapsed by default since the reasoning can dwarf the
+             actual answer and would otherwise dominate the panel.
+             Source field varies by provider — see Completion.extract_reasoning/1. --%>
+        <%= if @selected_request.metadata["response_reasoning"] do %>
+          <details class="mb-4">
+            <summary class="text-xs text-base-content/70 mb-1 cursor-pointer hover:text-base-content">
+              {gettext("Reasoning")} ({String.length(@selected_request.metadata["response_reasoning"])} chars)
+            </summary>
+            <div class="bg-info/10 border-l-2 border-info p-3 rounded mt-1">
+              <div class="text-xs font-semibold text-base-content/70 mb-1 uppercase">
+                {gettext("chain of thought")}
+              </div>
+              <div class="text-sm whitespace-pre-wrap font-mono">
+                {@selected_request.metadata["response_reasoning"]}
+              </div>
+            </div>
+          </details>
         <% end %>
 
         <%!-- Parameters Used --%>

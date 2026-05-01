@@ -30,7 +30,7 @@ defmodule PhoenixKitAI.Web.PromptForm do
       |> assign(:prompt, nil)
       |> assign(:form, to_form(AI.change_prompt(%Prompt{})))
       |> assign(:page_title, "AI Prompt")
-      |> assign(:loaded, false)
+      |> assign(:loaded_id, :unloaded)
 
     {:ok, socket}
   end
@@ -64,7 +64,13 @@ defmodule PhoenixKitAI.Web.PromptForm do
 
   @impl true
   def handle_params(params, _url, socket) do
-    if socket.assigns.loaded do
+    # `:loaded_id` tracks which `params["id"]` the LV currently has data
+    # for. `:unloaded` is the initial sentinel from `mount/3`; `nil`
+    # means "loaded as the new-prompt form"; a binary UUID means "loaded
+    # for that prompt". Re-loads only when the id actually changes —
+    # safe under `push_patch` between two edit URLs in the same LV
+    # process (no caller does this today, but cheap insurance).
+    if socket.assigns.loaded_id == params["id"] do
       {:noreply, socket}
     else
       handle_initial_params(params, socket)
@@ -77,7 +83,7 @@ defmodule PhoenixKitAI.Web.PromptForm do
         socket
         |> assign(:project_title, Settings.get_project_title())
         |> load_prompt(params["id"])
-        |> assign(:loaded, true)
+        |> assign(:loaded_id, params["id"])
 
       {:noreply, socket}
     else

@@ -27,6 +27,7 @@ defmodule PhoenixKitAI.Web.Endpoints do
   alias PhoenixKit.Utils.Date, as: UtilsDate
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitAI, as: AI
+  alias PhoenixKitAI.Endpoint
 
   @sort_options [
     {:id, "ID"},
@@ -61,6 +62,7 @@ defmodule PhoenixKitAI.Web.Endpoints do
       |> assign(:project_title, project_title)
       |> assign(:endpoints, [])
       |> assign(:endpoint_stats, %{})
+      |> assign(:integrations_by_uuid, %{})
       |> assign(:has_endpoints, false)
       |> assign(:sort_by, :id)
       |> assign(:sort_dir, :asc)
@@ -216,16 +218,15 @@ defmodule PhoenixKitAI.Web.Endpoints do
   defp parse_date_filter(value) when value in @valid_date_filters, do: value
   defp parse_date_filter(_), do: "7d"
 
-  # Endpoint filter can be integer ID or UUID
+  # Endpoint filter — always a UUID string in the current schema
+  # (`Request.endpoint_uuid`). Earlier versions of this column were
+  # an integer ID, which is why this helper used to coerce numeric
+  # strings to integers. Now the consumer (`maybe_filter_by/3` on
+  # `:endpoint_uuid`) only accepts binary, so we keep the value as
+  # a string. Empty / nil → nil so `maybe_filter_by` skips the clause.
   defp parse_endpoint_filter(nil), do: nil
   defp parse_endpoint_filter(""), do: nil
-
-  defp parse_endpoint_filter(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {int, ""} -> int
-      _ -> value
-    end
-  end
+  defp parse_endpoint_filter(value) when is_binary(value), do: value
 
   defp parse_string_param(nil), do: nil
   defp parse_string_param(""), do: nil
@@ -494,9 +495,24 @@ defmodule PhoenixKitAI.Web.Endpoints do
 
     endpoint_stats = AI.get_endpoint_usage_stats()
 
+    # Map of integration_uuid → connection (`%{name, data}`) for every
+    # provider this module supports. Loaded once so per-endpoint
+    # rendering can pull both the health status AND the integration
+    # name + masked api_key without an N+1 of
+    # `Integrations.connected?/1` / `get_credentials/1` calls. An
+    # endpoint whose `integration_uuid` is not a key in this map is
+    # an orphan (the integration row was deleted) — including a
+    # Mistral- or DeepSeek-bound endpoint whose connection lives under
+    # a non-openrouter provider key.
+    integrations_by_uuid =
+      Endpoint.valid_providers()
+      |> Enum.flat_map(&PhoenixKit.Integrations.list_connections/1)
+      |> Map.new(fn conn -> {conn.uuid, conn} end)
+
     socket
     |> assign(:endpoints, endpoints)
     |> assign(:endpoint_stats, endpoint_stats)
+    |> assign(:integrations_by_uuid, integrations_by_uuid)
     |> assign(:total_endpoints, total)
     |> assign(:has_endpoints, total > 0)
   end
@@ -605,6 +621,28 @@ defmodule PhoenixKitAI.Web.Endpoints do
   # Activity attribution — passed through to AI.update_endpoint/3 and
   # AI.delete_endpoint/2 so the mutation is logged against the right
   # actor. See PhoenixKitAI moduledoc for the activity logging pattern.
+  # Masks an api_key for display in the endpoint cards: shows the
+  # first 8 + last 4 characters. Picks an OpenRouter-style key
+  # apart cleanly (`sk-or-v1-…abcd`) — recognisable provider
+  # prefix retained, identifying suffix retained, middle elided.
+  # Short keys (< 14 chars) get fully masked so we don't accidentally
+  # expose most of the key.
+  @doc false
+  def mask_api_key(nil), do: "—"
+  def mask_api_key(""), do: "—"
+
+  def mask_api_key(key) when is_binary(key) do
+    if String.length(key) < 14 do
+      "•••"
+    else
+      head = String.slice(key, 0, 8)
+      tail = String.slice(key, -4..-1)
+      head <> "…" <> tail
+    end
+  end
+
+  def mask_api_key(_), do: "—"
+
   defp actor_opts(socket) do
     role = if admin?(socket), do: "admin", else: "user"
 

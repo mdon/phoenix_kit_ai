@@ -199,6 +199,20 @@ defmodule PhoenixKitAI.PromptTest do
       prompt = %Prompt{variables: []}
       assert Prompt.validate_variables(prompt, %{}) == :ok
     end
+
+    test "returns :ok for empty variables list when provided is non-map" do
+      # Pin the second clause `def validate_variables(%__MODULE__{variables: []}, _)`.
+      # The first clause has `when is_map(provided)` guard, so a
+      # non-map `provided` falls through to this empty-vars head.
+      prompt = %Prompt{variables: []}
+      assert Prompt.validate_variables(prompt, "not a map") == :ok
+    end
+
+    test "returns {:error, vars} for non-empty variables when provided is non-map" do
+      # Pin the third clause `def validate_variables(%__MODULE__{variables: vars}, _)`.
+      prompt = %Prompt{variables: ["X", "Y"]}
+      assert Prompt.validate_variables(prompt, "not a map") == {:error, ["X", "Y"]}
+    end
   end
 
   # ============================================================================

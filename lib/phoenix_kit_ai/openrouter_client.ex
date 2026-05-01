@@ -1,4 +1,6 @@
 defmodule PhoenixKitAI.OpenRouterClient do
+  import Ecto.Query, only: [from: 2]
+
   @moduledoc """
   OpenRouter API client for PhoenixKit AI system.
 
@@ -27,7 +29,13 @@ defmodule PhoenixKitAI.OpenRouterClient do
   require Logger
 
   @base_url "https://openrouter.ai/api/v1"
-  @timeout 30_000
+  # 15s is generous for `/models` and `/auth/key` — both are
+  # lightweight metadata endpoints that respond in <5s on a healthy
+  # connection. The previous 30s left operators staring at a spinner
+  # for a full half-minute when something was wedged. Chat completions
+  # have their own 120s budget in `Completion.chat_completion/3`;
+  # this constant only governs validate + model-list traffic.
+  @timeout 15_000
 
   # OpenRouter's /models endpoint does not return embedding models, so we ship
   # a curated list. This table is manually maintained — bump the date when
@@ -104,7 +112,7 @@ defmodule PhoenixKitAI.OpenRouterClient do
   - `architecture` - Model architecture details
   """
   def fetch_models(api_key, opts \\ []) do
-    url = "#{@base_url}/models"
+    url = "#{Keyword.get(opts, :base_url, @base_url)}/models"
     headers = build_headers(api_key, opts)
     model_type = Keyword.get(opts, :model_type, :all)
 
@@ -145,11 +153,12 @@ defmodule PhoenixKitAI.OpenRouterClient do
   def fetch_models_grouped(api_key, opts \\ []) do
     # Default to :text for backward compatibility
     opts = Keyword.put_new(opts, :model_type, :text)
+    fallback_provider = Keyword.get(opts, :fallback_provider)
 
     with {:ok, models} <- fetch_models(api_key, opts) do
       grouped =
         models
-        |> Enum.group_by(&provider_from_model/1)
+        |> Enum.group_by(&provider_from_model(&1, fallback_provider))
         |> Enum.sort_by(fn {provider, _} -> provider end)
 
       {:ok, grouped}
@@ -360,13 +369,14 @@ defmodule PhoenixKitAI.OpenRouterClient do
   @doc """
   Builds headers from an Endpoint struct's provider_settings.
 
-  Resolves the API key from `PhoenixKit.Integrations` using the endpoint's
-  provider field, falling back to the endpoint's own api_key if present (legacy).
+  Resolves the API key by uuid lookup against `PhoenixKit.Integrations`,
+  falling back to the legacy `endpoint.api_key` column when the
+  integration row is missing or has no key.
   """
-  def build_headers_from_endpoint(%{provider: provider, provider_settings: settings} = endpoint) do
+  def build_headers_from_endpoint(%{provider_settings: settings} = endpoint) do
     settings = settings || %{}
 
-    api_key = resolve_api_key(provider, endpoint)
+    api_key = resolve_api_key(endpoint)
 
     opts =
       []
@@ -376,10 +386,29 @@ defmodule PhoenixKitAI.OpenRouterClient do
     build_headers(api_key, opts)
   end
 
-  defp resolve_api_key(provider, endpoint) do
-    # provider is the endpoint's provider field, e.g. "openrouter" or "openrouter:my-key"
-    case PhoenixKit.Integrations.get_credentials(provider) do
+  defp resolve_api_key(endpoint) do
+    # Prefer the explicit `integration_uuid` reference. Fall back to the
+    # legacy `provider` field (which carried a uuid before the dedicated
+    # column existed) for any endpoint that wasn't reached by V107's
+    # backfill. Final fallback is the deprecated `endpoint.api_key`
+    # column with a per-endpoint warning log.
+    case maybe_get_credentials(endpoint.integration_uuid) do
       {:ok, %{"api_key" => key}} when is_binary(key) and key != "" ->
+        key
+
+      _ ->
+        resolve_via_legacy_provider(endpoint)
+    end
+  end
+
+  defp resolve_via_legacy_provider(endpoint) do
+    case maybe_get_credentials(endpoint.provider) do
+      {:ok, %{"api_key" => key}} = result when is_binary(key) and key != "" ->
+        # Legacy path resolved — promote the resolved uuid to
+        # `endpoint.integration_uuid` so future requests take the
+        # clean uuid path. Best-effort; failure here doesn't block
+        # the request.
+        maybe_promote_legacy_provider(endpoint, result)
         key
 
       _ ->
@@ -388,12 +417,121 @@ defmodule PhoenixKitAI.OpenRouterClient do
     end
   end
 
+  defp maybe_get_credentials(nil), do: {:error, :not_configured}
+  defp maybe_get_credentials(""), do: {:error, :not_configured}
+
+  defp maybe_get_credentials(key) when is_binary(key) do
+    PhoenixKit.Integrations.get_credentials(key)
+  end
+
+  # Lazy on-read promotion: when integration_uuid is nil but the
+  # legacy `provider` resolves to credentials, write the resolved
+  # uuid back to the endpoint so the next call takes the direct path.
+  # Safe to fail silently — the request that triggered this still
+  # got its api_key from the legacy path.
+  defp maybe_promote_legacy_provider(%{integration_uuid: nil} = endpoint, _resolved) do
+    integration_uuid = lookup_uuid_for_provider(endpoint.provider)
+
+    if is_binary(integration_uuid) do
+      try do
+        repo = PhoenixKit.RepoHelper.repo()
+
+        {count, _} =
+          from(e in PhoenixKitAI.Endpoint,
+            where: e.uuid == ^endpoint.uuid and is_nil(e.integration_uuid)
+          )
+          |> repo.update_all(
+            set: [
+              integration_uuid: integration_uuid,
+              updated_at: DateTime.utc_now()
+            ]
+          )
+
+        if count > 0 do
+          log_lazy_promotion(endpoint, integration_uuid)
+        end
+      rescue
+        e ->
+          # Lazy promotion is best-effort — the request that triggered
+          # this already got its api_key from the legacy fallback path,
+          # so we don't want a write failure here to cascade into a
+          # request-path crash. Log with grep-able context (endpoint
+          # uuid + exception type) so operators can correlate stuck
+          # promotions with infra issues. Don't include
+          # `Exception.message/1` raw — some exception structs embed
+          # query bindings that could leak provider/api_key context.
+          Logger.warning(fn ->
+            "[OpenRouterClient] lazy promotion of integration_uuid failed: " <>
+              "endpoint_uuid=#{endpoint.uuid}, " <>
+              "exception=#{inspect(e.__struct__)}"
+          end)
+
+          :ok
+      catch
+        :exit, reason ->
+          # Sandbox-owner exit at test boundaries falls here. Same
+          # justification as the rescue above — don't crash the
+          # request, but leave a breadcrumb.
+          Logger.debug(fn ->
+            "[OpenRouterClient] lazy promotion exited: " <>
+              "endpoint_uuid=#{endpoint.uuid}, reason=#{inspect(reason)}"
+          end)
+
+          :ok
+      end
+    end
+
+    :ok
+  end
+
+  defp maybe_promote_legacy_provider(_endpoint, _resolved), do: :ok
+
+  defp lookup_uuid_for_provider(provider) when is_binary(provider) do
+    # Delegates to core's dual-input primitive. Previously this helper
+    # carried its own regex + dispatch + provider:name split; the same
+    # pair existed verbatim on `PhoenixKitAI.resolve_provider_to_uuid/1`.
+    # Centralising into `Integrations.resolve_to_uuid/1` removes the
+    # duplication and eliminates the "fourth provider tempts a third
+    # copy-paste" risk.
+    case PhoenixKit.Integrations.resolve_to_uuid(provider) do
+      {:ok, uuid} -> uuid
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp lookup_uuid_for_provider(_), do: nil
+
+  defp log_lazy_promotion(endpoint, integration_uuid) do
+    if Code.ensure_loaded?(PhoenixKit.Activity) do
+      PhoenixKit.Activity.log(%{
+        action: "integration.legacy_migrated",
+        module: "ai",
+        mode: "auto",
+        resource_type: "endpoint",
+        resource_uuid: endpoint.uuid,
+        metadata: %{
+          "migration_kind" => "reference_migrated",
+          "source" => "lazy_on_read",
+          "integration_uuid" => integration_uuid,
+          "actor_role" => "system"
+        }
+      })
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
   # Warn at most once per endpoint per VM. The legacy fallback path runs
   # on every chat completion, and a per-request warning floods logs for
   # endpoints that haven't migrated to Integrations yet. `:persistent_term`
   # gives us O(1) check + write and survives across processes.
-  defp warn_legacy_api_key(%{uuid: uuid, name: name, api_key: key})
-       when is_binary(key) and key != "" do
+  @doc false
+  def warn_legacy_api_key(%{uuid: uuid, name: name, api_key: key})
+      when is_binary(key) and key != "" do
     key_term = {__MODULE__, :legacy_warned, uuid}
 
     case :persistent_term.get(key_term, :unwarned) do
@@ -412,7 +550,7 @@ defmodule PhoenixKitAI.OpenRouterClient do
     end
   end
 
-  defp warn_legacy_api_key(_), do: :ok
+  def warn_legacy_api_key(_), do: :ok
 
   @doc """
   Returns the base URL for OpenRouter API.
@@ -560,7 +698,17 @@ defmodule PhoenixKitAI.OpenRouterClient do
   defp model_matches_type?(_model, :all), do: true
 
   defp model_matches_type?(model, :text) do
-    get_modality(model) == "text->text"
+    case get_modality(model) do
+      # OpenRouter: explicit "text->text" modality
+      "text->text" -> true
+      # No modality field at all (Mistral, DeepSeek — OpenAI-compatible
+      # /models endpoints don't return architecture metadata). Treat as
+      # text by default since callers asking for `:text` against an
+      # endpoint that doesn't expose modality just want "show all the
+      # chat models the API listed".
+      "" -> true
+      _ -> false
+    end
   end
 
   defp model_matches_type?(model, :vision) do
@@ -578,10 +726,16 @@ defmodule PhoenixKitAI.OpenRouterClient do
     architecture["modality"] || ""
   end
 
-  defp provider_from_model(model) do
-    case String.split(model.id, "/") do
-      [provider | _] -> provider
-      _ -> "other"
+  defp provider_from_model(model, fallback_provider) do
+    case String.split(model.id, "/", parts: 2) do
+      # OpenRouter shape: "anthropic/claude-3-opus" → "anthropic"
+      [provider, _name] -> provider
+      # Mistral / DeepSeek shape: "mistral-large-latest" with no slash.
+      # Group everything under the endpoint's provider key so the form's
+      # provider picker has one entry containing all the models. Falls
+      # back to "other" only when no fallback was passed.
+      [_no_slash] -> fallback_provider || "other"
+      _ -> fallback_provider || "other"
     end
   end
 
