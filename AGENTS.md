@@ -87,7 +87,7 @@ This is a **PhoenixKit module** that implements the `PhoenixKit.Module` behaviou
 
 - **`PhoenixKitAI.Errors`** (`lib/phoenix_kit_ai/errors.ex`) — Maps error atoms returned from the API layer (`:endpoint_not_found`, `:invalid_api_key`, etc.) to translated strings via gettext. UI surfaces errors via `Errors.message/1` so business logic stays locale-agnostic.
 
-- **`PhoenixKitAI.Completion`** (`lib/phoenix_kit_ai/completion.ex`) — HTTP client for chat completions and embeddings. Provider-agnostic: builds `<endpoint.base_url>/chat/completions` and `<endpoint.base_url>/embeddings` URLs, so OpenRouter / Mistral / DeepSeek all flow through the same path. Also exposes `extract_content/1` and `extract_reasoning/1` for parsing responses (the latter normalises three known field names — `reasoning`, `reasoning_content`, `thinking` — into one return value).
+- **`PhoenixKitAI.Completion`** (`lib/phoenix_kit_ai/completion.ex`) — HTTP client for chat completions and embeddings. Provider-agnostic: builds `<endpoint.base_url>/chat/completions` and `<endpoint.base_url>/embeddings` URLs, so OpenRouter / Mistral / DeepSeek all flow through the same path. When `endpoint.base_url` is missing it falls back through `Endpoint.default_base_url(endpoint.provider)` rather than a hardcoded OpenRouter URL — silent misrouting of Mistral / DeepSeek traffic to openrouter.ai is a real failure mode for legacy rows persisted before the changeset gained `maybe_set_default_base_url`. If neither resolves, raises `ArgumentError` instead of misrouting. Also exposes `extract_content/1` and `extract_reasoning/1` for parsing responses (the latter normalises three known field names — `reasoning`, `reasoning_content`, `thinking` — into one return value).
 
 - **`PhoenixKitAI.OpenRouterClient`** (`lib/phoenix_kit_ai/openrouter_client.ex`) — API key validation, model discovery, header building. Despite the name (kept for git-history continuity) the module is now generic across OpenRouter / Mistral / DeepSeek: `fetch_models/2` and `fetch_models_grouped/2` accept a `:base_url` opt that overrides the OpenRouter default, and a `:fallback_provider` opt that groups slash-less model IDs (Mistral's `mistral-large-latest`, DeepSeek's `deepseek-chat`) under a single key. Credentials are resolved from `PhoenixKit.Integrations` via the endpoint's `integration_uuid` field with a 3-tier fallback ladder (uuid → legacy `provider` → legacy `api_key` column) — see "Migrating from legacy `endpoint.api_key`" below.
 
@@ -266,13 +266,18 @@ OpenAI-compatible at `<base_url>/chat/completions` and `/models`.
 The picker filters connections to whichever provider is currently
 selected on the dropdown. Switching providers (e.g. OpenRouter →
 Mistral) clears any selected integration, the model list, the
-selected_model assign, AND nils `base_url` so the changeset's
-`maybe_set_default_base_url/1` picks up the new provider's default
-URL. The picker NEVER auto-selects a single available connection —
-even when only one exists, the operator must pick explicitly so the
-form's display matches the endpoint's actual stored state. See
-"Picker reflects state, never auto-picks" below for the policy
-rationale.
+`selected_model` assign, the `model` form param, AND empties
+`base_url` so the changeset's `maybe_set_default_base_url/1` picks up
+the new provider's default URL. Both `model` and `base_url` are
+cleared with `""` rather than `nil` because the form template's
+fallback (`@form.params["model"] || @endpoint.model`) treats `nil`
+as "no intent" and falls through to the saved value — `""` is truthy
+in Elixir, so the `||` short-circuits there and the display reflects
+the cleared state. The picker NEVER auto-selects a single available
+connection — even when only one exists, the operator must pick
+explicitly so the form's display matches the endpoint's actual
+stored state. See "Picker reflects state, never auto-picks" below
+for the policy rationale.
 
 ### Dynamic model selector
 

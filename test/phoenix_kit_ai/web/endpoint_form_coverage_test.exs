@@ -150,6 +150,44 @@ defmodule PhoenixKitAI.Web.EndpointFormCoverageTest do
 
       assert is_binary(render(view))
     end
+
+    # Pins the provider-change handling: when the operator switches
+    # provider on an existing form, model strings are provider-shaped
+    # (`"anthropic/claude-3-opus"` on OpenRouter vs `"mistral-large-latest"`
+    # on Mistral). The previous behaviour kept the stale model id in
+    # the form, which the template's `params["model"] || endpoint.model`
+    # fallback re-displayed under a "Not in current model list" warning
+    # while the changeset disagreed (`"can't be blank"`). Empty string
+    # is the sentinel — `nil` would fall through the `||` to the saved
+    # `endpoint.model`.
+    test "switching provider via validate clears the model param", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
+
+      # Stamp an OpenRouter model first so the form has a value to clear.
+      render_change(view, "validate", %{
+        "endpoint" => %{
+          "name" => "PV",
+          "provider" => "openrouter",
+          "model" => "anthropic/claude-3-haiku"
+        }
+      })
+
+      # Switching provider should empty the model in the rendered form.
+      html =
+        render_change(view, "validate", %{
+          "endpoint" => %{
+            "name" => "PV",
+            "provider" => "mistral",
+            "model" => "anthropic/claude-3-haiku"
+          }
+        })
+
+      # The hidden input that round-trips the value should now carry
+      # an empty string (not the OpenRouter-shaped id), and the model
+      # display block should be in its empty state.
+      refute html =~ ~s|value="anthropic/claude-3-haiku"|
+      assert html =~ ~s|name="endpoint[model]"|
+    end
   end
 
   describe "edit form load + integration PubSub" do
