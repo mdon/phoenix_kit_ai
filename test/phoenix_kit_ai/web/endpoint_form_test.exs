@@ -107,9 +107,9 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
       assert html =~ "Legacy API key (recovery)"
 
       # Simulate the integration_picker setting active_connection. The
-      # form LV exposes "select_openrouter_connection" for this.
+      # form LV exposes "select_provider_connection" for this.
       view
-      |> render_hook("select_openrouter_connection", %{"uuid" => integration_uuid})
+      |> render_hook("select_provider_connection", %{"uuid" => integration_uuid})
 
       # Submit the form. The active_connection feeds integration_uuid
       # into the params via the form's save handler.
@@ -414,7 +414,7 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
     end
   end
 
-  describe "select_openrouter_connection event" do
+  describe "select_provider_connection event" do
     # The picker dispatches this event with the chosen integration's
     # uuid. The form should write it into `form.params` under
     # `integration_uuid` (not `provider`) so save persists the new
@@ -428,7 +428,7 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
       {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
 
       view
-      |> element(~s(button[phx-click="select_openrouter_connection"][phx-value-uuid="#{uuid}"]))
+      |> element(~s(button[phx-click="select_provider_connection"][phx-value-uuid="#{uuid}"]))
       |> render_click()
 
       assigns = :sys.get_state(view.pid).socket.assigns
@@ -450,7 +450,7 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
 
       # Pick it.
       view
-      |> render_hook("select_openrouter_connection", %{
+      |> render_hook("select_provider_connection", %{
         "uuid" => uuid,
         "action" => "select"
       })
@@ -462,7 +462,7 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
 
       # Click it again — the picker emits action="deselect".
       view
-      |> render_hook("select_openrouter_connection", %{
+      |> render_hook("select_provider_connection", %{
         "uuid" => uuid,
         "action" => "deselect"
       })
@@ -490,7 +490,7 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
       assert :sys.get_state(view.pid).socket.assigns.active_connection == integration_uuid
 
       view
-      |> render_hook("select_openrouter_connection", %{
+      |> render_hook("select_provider_connection", %{
         "uuid" => integration_uuid,
         "action" => "deselect"
       })

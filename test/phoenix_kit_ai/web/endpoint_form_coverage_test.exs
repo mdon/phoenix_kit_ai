@@ -3,7 +3,7 @@ defmodule PhoenixKitAI.Web.EndpointFormCoverageTest do
   Coverage push for `PhoenixKitAI.Web.EndpointForm` LiveView.
 
   Drives select_provider, select_model, set_manual_model, clear_model,
-  toggle_reasoning, select_openrouter_connection, save (success +
+  toggle_reasoning, select_provider_connection, save (success +
   error), and the various `handle_info` clauses for integration events.
   """
 
@@ -65,11 +65,11 @@ defmodule PhoenixKitAI.Web.EndpointFormCoverageTest do
     end
   end
 
-  describe "select_openrouter_connection event" do
+  describe "select_provider_connection event" do
     test "selects an unknown UUID with no matching integration", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
 
-      render_hook(view, "select_openrouter_connection", %{
+      render_hook(view, "select_provider_connection", %{
         "uuid" => "01234567-89ab-7def-8000-000000000abc"
       })
 
@@ -549,11 +549,11 @@ defmodule PhoenixKitAI.Web.EndpointFormCoverageTest do
       assert is_binary(result) or match?({:error, _}, result)
     end
 
-    test "select_openrouter_connection with a connected integration triggers fetch",
+    test "select_provider_connection with a connected integration triggers fetch",
          %{conn: conn} do
       # Drive the `if connected do send(self(), :fetch_models_from_integration);
       # {:noreply, assign(socket, :models_loading, true)}` branch
-      # of select_openrouter_connection (line 432-434) AND
+      # of select_provider_connection (line 432-434) AND
       # reload_connections's `current_active && Enum.any?(...) -> current_active`
       # branch (line 484).
       seeded =
@@ -563,7 +563,7 @@ defmodule PhoenixKitAI.Web.EndpointFormCoverageTest do
 
       {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
 
-      render_change(view, "select_openrouter_connection", %{"uuid" => seeded.uuid})
+      render_change(view, "select_provider_connection", %{"uuid" => seeded.uuid})
 
       html = render(view)
       assert is_binary(html)

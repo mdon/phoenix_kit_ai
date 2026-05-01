@@ -62,15 +62,17 @@
 
             <div class="mt-4">
               <label class="label">
-                <span class="label-text font-medium">OpenRouter Connection</span>
+                <span class="label-text font-medium">
+                  {Endpoint.provider_label(@current_provider)} {gettext("Connection")}
+                </span>
               </label>
               <.integration_picker
-                id="endpoint-openrouter-picker"
-                connections={@openrouter_connections}
+                id="endpoint-provider-picker"
+                connections={@provider_connections}
                 selected={@selected_uuids}
-                provider="openrouter"
+                provider={@current_provider}
                 compact={true}
-                on_select="select_openrouter_connection"
+                on_select="select_provider_connection"
                 empty_url={PhoenixKit.Utils.Routes.path("/admin/settings/integrations/new")}
               />
             </div>

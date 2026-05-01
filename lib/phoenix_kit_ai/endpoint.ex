@@ -80,7 +80,7 @@ defmodule PhoenixKitAI.Endpoint do
   @type t :: %__MODULE__{}
 
   @primary_key {:uuid, UUIDv7, autogenerate: true}
-  @valid_providers ~w(openrouter)
+  @valid_providers ~w(openrouter mistral deepseek)
 
   @derive {Jason.Encoder,
            only: [
@@ -272,14 +272,22 @@ defmodule PhoenixKitAI.Endpoint do
   """
   def provider_options do
     [
-      {"OpenRouter", "openrouter"}
+      {"OpenRouter", "openrouter"},
+      {"Mistral", "mistral"},
+      {"DeepSeek", "deepseek"}
     ]
   end
 
   @doc """
   Returns the default base URL for a provider.
+
+  All three current providers expose an OpenAI-compatible chat
+  completions endpoint at `<base>/chat/completions`, so the same
+  Completion HTTP layer works for them.
   """
   def default_base_url("openrouter"), do: "https://openrouter.ai/api/v1"
+  def default_base_url("mistral"), do: "https://api.mistral.ai/v1"
+  def default_base_url("deepseek"), do: "https://api.deepseek.com/v1"
   def default_base_url(_), do: nil
 
   @doc """
@@ -299,6 +307,8 @@ defmodule PhoenixKitAI.Endpoint do
   Returns a display label for the provider.
   """
   def provider_label("openrouter"), do: "OpenRouter"
+  def provider_label("mistral"), do: "Mistral"
+  def provider_label("deepseek"), do: "DeepSeek"
   def provider_label(provider), do: provider
 
   @doc """

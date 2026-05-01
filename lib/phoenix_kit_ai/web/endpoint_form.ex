@@ -147,7 +147,8 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       socket
       |> assign(:project_title, nil)
       |> assign(:current_path, Routes.path("/admin/ai"))
-      |> assign(:openrouter_connections, [])
+      |> assign(:provider_connections, [])
+      |> assign(:current_provider, "openrouter")
       |> assign(:models, [])
       |> assign(:models_grouped, [])
       |> assign(:models_loading, false)
@@ -190,7 +191,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
       endpoint ->
         changeset = AI.change_endpoint(endpoint)
-        connections = socket.assigns.openrouter_connections
+        connections = socket.assigns.provider_connections
 
         # Resolve the picker's `active_connection` from the endpoint's
         # `integration_uuid`. Fall back to the legacy `provider` field
@@ -244,6 +245,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
           |> assign(:active_connection, active)
           |> assign(:selected_uuids, selected_uuids)
           |> assign(:integration_connected, connected)
+          |> assign(:current_provider, endpoint.provider)
 
         # Load models if integration is connected
         if connected do
@@ -276,7 +278,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       socket =
         socket
         |> assign(:project_title, Settings.get_project_title())
-        |> assign(:openrouter_connections, Integrations.list_connections("openrouter"))
+        |> assign(:provider_connections, load_all_provider_connections())
         |> load_endpoint(params["id"])
         |> assign(:loaded_id, params["id"])
 
@@ -291,6 +293,13 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @impl true
   def handle_event("validate", %{"endpoint" => params}, socket) do
+    # When the operator changes the provider dropdown, the previously
+    # picked integration is for a different provider — clear it so the
+    # picker doesn't render an off-provider uuid as orphaned. Also nil
+    # out base_url so the changeset's `maybe_set_default_base_url`
+    # picks up the new provider's default URL.
+    {params, socket} = maybe_handle_provider_change(params, socket)
+
     changeset =
       (socket.assigns.endpoint || %Endpoint{})
       |> AI.change_endpoint(params)
@@ -308,8 +317,36 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       socket
       |> assign(:form, to_form(changeset))
       |> assign(:selected_model, selected_model)
+      |> assign(:current_provider, params["provider"] || socket.assigns[:current_provider])
 
     {:noreply, socket}
+  end
+
+  defp maybe_handle_provider_change(params, socket) do
+    new_provider = params["provider"]
+    current_provider = socket.assigns[:current_provider]
+
+    provider_changed? =
+      is_binary(new_provider) and is_binary(current_provider) and new_provider != current_provider
+
+    if provider_changed? do
+      params = Map.put(params, "base_url", nil)
+
+      socket =
+        socket
+        |> assign(:active_connection, nil)
+        |> assign(:selected_uuids, [])
+        |> assign(:integration_connected, false)
+        |> assign(:models, [])
+        |> assign(:models_grouped, [])
+        |> assign(:selected_model, nil)
+        |> assign(:selected_provider, nil)
+        |> assign(:provider_models, [])
+
+      {params, socket}
+    else
+      {params, socket}
+    end
   end
 
   @impl true
@@ -432,7 +469,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
   end
 
   @impl true
-  def handle_event("select_openrouter_connection", %{"action" => "deselect"}, socket) do
+  def handle_event("select_provider_connection", %{"action" => "deselect"}, socket) do
     # Clicking the currently-selected card unpicks it. Write nil into
     # the form params so save/2 persists the unpinning instead of
     # re-using the last-stamped value.
@@ -453,7 +490,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
     {:noreply, socket}
   end
 
-  def handle_event("select_openrouter_connection", %{"uuid" => uuid}, socket) do
+  def handle_event("select_provider_connection", %{"uuid" => uuid}, socket) do
     # Pin the endpoint to the chosen integration row by uuid.
     updated_params = Map.put(socket.assigns.form.params, "integration_uuid", uuid)
     form = %{socket.assigns.form | params: updated_params}
@@ -513,7 +550,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
   end
 
   defp reload_connections(socket) do
-    connections = Integrations.list_connections("openrouter")
+    connections = load_all_provider_connections()
     current_active = socket.assigns[:active_connection]
     endpoint_uuid = socket.assigns[:endpoint] && socket.assigns.endpoint.integration_uuid
 
@@ -543,10 +580,20 @@ defmodule PhoenixKitAI.Web.EndpointForm do
     connected = active && Integrations.connected?(active)
 
     socket
-    |> assign(:openrouter_connections, connections)
+    |> assign(:provider_connections, connections)
     |> assign(:active_connection, active)
     |> assign(:selected_uuids, selected_uuids)
     |> assign(:integration_connected, connected)
+  end
+
+  # Loads connections for every AI provider in one shot. The picker
+  # filters client-side via its `provider` attr (matches `data["provider"]`),
+  # so feeding it the union lets a `provider` field change in the form
+  # immediately re-filter the cards without a server round-trip — and
+  # without us having to track which provider the connections are for.
+  defp load_all_provider_connections do
+    Endpoint.valid_providers()
+    |> Enum.flat_map(&Integrations.list_connections/1)
   end
 
   # Normalise a form field value (always a string from HTML) into the
@@ -728,21 +775,29 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @impl true
   def handle_info(:fetch_models_from_integration, socket) do
-    # Only fetch models for the picker's actual selection. Falling
-    # back to "any openrouter:default connection" silently misled
-    # operators whose integration was named anything other than
-    # "default" (and contradicted the picker's "reflect state, never
-    # auto-pick" policy).
-    active_key = socket.assigns[:active_connection]
+    # Model auto-listing is OpenRouter-specific (the response shape
+    # `OpenRouterClient.fetch_models_grouped/2` parses isn't portable
+    # across providers). For Mistral / DeepSeek, the form's manual
+    # model-name input is the path — just clear the loading state.
+    if socket.assigns[:current_provider] != "openrouter" do
+      {:noreply, assign(socket, models_loading: false, models_error: nil)}
+    else
+      # Only fetch for the picker's actual selection. Falling back to
+      # "any openrouter:default connection" silently misled operators
+      # whose integration was named anything other than "default" (and
+      # contradicted the picker's "reflect state, never auto-pick"
+      # policy).
+      active_key = socket.assigns[:active_connection]
 
-    case active_key && Integrations.get_credentials(active_key) do
-      {:ok, %{"api_key" => api_key}} when is_binary(api_key) and api_key != "" ->
-        send(self(), {:fetch_models, api_key})
-        {:noreply, socket}
+      case active_key && Integrations.get_credentials(active_key) do
+        {:ok, %{"api_key" => api_key}} when is_binary(api_key) and api_key != "" ->
+          send(self(), {:fetch_models, api_key})
+          {:noreply, socket}
 
-      _ ->
-        {:noreply,
-         assign(socket, models_loading: false, models_error: "No OpenRouter API key configured")}
+        _ ->
+          {:noreply,
+           assign(socket, models_loading: false, models_error: "No OpenRouter API key configured")}
+      end
     end
   end
 
