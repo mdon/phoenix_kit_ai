@@ -4,7 +4,9 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ## Project Overview
 
-PhoenixKit AI module — provides AI endpoint management, prompt templates, completions (via OpenRouter), and usage tracking. Implements the `PhoenixKit.Module` behaviour for auto-discovery by a parent Phoenix application.
+PhoenixKit AI module — provides AI endpoint management, prompt templates, completions, and usage tracking via three OpenAI-compatible providers (OpenRouter, Mistral, DeepSeek). Implements the `PhoenixKit.Module` behaviour for auto-discovery by a parent Phoenix application.
+
+The provider list lives in `Endpoint.provider_options/0` (form dropdown), `Endpoint.default_base_url/1` (per-provider URL defaults), and `Endpoint.@valid_providers` (changeset's `validate_inclusion`). Adding a fourth provider is a 4-line edit + a core providers.ex entry. See "Multi-provider support" below for the current shape.
 
 ## What This Module Does NOT Have (by design)
 
@@ -55,7 +57,7 @@ This is a **library** (not a standalone Phoenix app) — in production the host 
 
 - `phoenix_kit` (`~> 1.7`) — Module behaviour, Settings API, shared components, RepoHelper, Activity logging, Integrations
 - `phoenix_live_view` — Web framework (LiveView UI)
-- `req` (via phoenix_kit) — HTTP client for OpenRouter API calls
+- `req` (via phoenix_kit) — HTTP client for chat completions, embeddings, and `/models` discovery across all three providers
 - `jason` (via phoenix_kit) — JSON encoding/decoding
 - `lazy_html` (`:test` only) — HTML assertions in `Phoenix.LiveViewTest`
 
@@ -71,7 +73,7 @@ This is a **PhoenixKit module** that implements the `PhoenixKit.Module` behaviou
 4. `route_module/0` provides additional admin routes (new/edit/usage) via `admin_routes/0`
 5. Settings are persisted via `PhoenixKit.Settings` API (DB-backed in parent app)
 6. Permissions are declared via `permission_metadata/0` and checked via `Scope.has_module_access?/2`
-7. API keys are managed centrally via `PhoenixKit.Integrations`. Each endpoint stores an integration connection key in its `provider` field. The module declares `required_integrations: ["openrouter"]`.
+7. API keys are managed centrally via `PhoenixKit.Integrations`. Each endpoint pins to a specific integration row by uuid in `endpoint.integration_uuid` (added in core's V107 migration with backfill from the legacy `provider` string column). The form's picker filters connections to whichever provider is currently selected on the dropdown — see "Multi-provider support" below. The module declares `required_integrations: ["openrouter"]` because the original wired provider was OpenRouter; Mistral / DeepSeek are additionally supported but not required for the module to run.
 
 ### Key Modules
 
@@ -85,9 +87,9 @@ This is a **PhoenixKit module** that implements the `PhoenixKit.Module` behaviou
 
 - **`PhoenixKitAI.Errors`** (`lib/phoenix_kit_ai/errors.ex`) — Maps error atoms returned from the API layer (`:endpoint_not_found`, `:invalid_api_key`, etc.) to translated strings via gettext. UI surfaces errors via `Errors.message/1` so business logic stays locale-agnostic.
 
-- **`PhoenixKitAI.Completion`** (`lib/phoenix_kit_ai/completion.ex`) — HTTP client for OpenRouter chat completions and embeddings.
+- **`PhoenixKitAI.Completion`** (`lib/phoenix_kit_ai/completion.ex`) — HTTP client for chat completions and embeddings. Provider-agnostic: builds `<endpoint.base_url>/chat/completions` and `<endpoint.base_url>/embeddings` URLs, so OpenRouter / Mistral / DeepSeek all flow through the same path. Also exposes `extract_content/1` and `extract_reasoning/1` for parsing responses (the latter normalises three known field names — `reasoning`, `reasoning_content`, `thinking` — into one return value).
 
-- **`PhoenixKitAI.OpenRouterClient`** (`lib/phoenix_kit_ai/openrouter_client.ex`) — API key validation, model discovery, header building. API keys are resolved from `PhoenixKit.Integrations` via the endpoint's `provider` field (a UUID referencing an integration connection).
+- **`PhoenixKitAI.OpenRouterClient`** (`lib/phoenix_kit_ai/openrouter_client.ex`) — API key validation, model discovery, header building. Despite the name (kept for git-history continuity) the module is now generic across OpenRouter / Mistral / DeepSeek: `fetch_models/2` and `fetch_models_grouped/2` accept a `:base_url` opt that overrides the OpenRouter default, and a `:fallback_provider` opt that groups slash-less model IDs (Mistral's `mistral-large-latest`, DeepSeek's `deepseek-chat`) under a single key. Credentials are resolved from `PhoenixKit.Integrations` via the endpoint's `integration_uuid` field with a 3-tier fallback ladder (uuid → legacy `provider` → legacy `api_key` column) — see "Migrating from legacy `endpoint.api_key`" below.
 
 - **`PhoenixKitAI.AIModel`** (`lib/phoenix_kit_ai/ai_model.ex`) — Normalized struct for OpenRouter model data.
 
@@ -227,6 +229,121 @@ Tables owned by this module:
 - `phoenix_kit_ai_prompts` — Prompt templates (UUIDv7 PK)
 - `phoenix_kit_ai_requests` — Request logs for usage tracking (UUIDv7 PK, FK to endpoints/prompts/users)
 
+## Multi-provider support
+
+Three OpenAI-compatible providers wired into the endpoint form:
+
+| Provider key | Default base URL | `provider_label/1` | Notes |
+|---|---|---|---|
+| `"openrouter"` | `https://openrouter.ai/api/v1` | "OpenRouter" | Aggregator; ~100 chat models with rich pricing/modality metadata. `/models` does NOT include embeddings — see curated list in `OpenRouterClient.builtin_embedding_models/0` |
+| `"mistral"` | `https://api.mistral.ai/v1` | "Mistral" | Native Mistral API. `/v1/models` returns chat AND embedding models in one list (`mistral-embed`, `codestral-embed`); operators pick the right id manually |
+| `"deepseek"` | `https://api.deepseek.com/v1` | "DeepSeek" | Native DeepSeek API. `/models` returns chat models (`deepseek-chat`, `deepseek-reasoner`). Reasoner emits chain-of-thought — see "Reasoning capture" below |
+
+**Provider definitions** live in core's `PhoenixKit.Integrations.Providers`
+registry (built-in: `google`, `microsoft`, `openrouter`, `mistral`,
+`deepseek`). Each entry declares its auth_type (all three AI providers
+are `:api_key`), validation URL (used by Settings → Integrations'
+"Test Connection" button), setup_fields, and instruction copy for the
+collapsible "Setup Instructions" panel.
+
+**Adding a fourth AI provider** requires four edits in this module
+(plus a core providers.ex entry):
+
+1. `Endpoint.@valid_providers ~w(openrouter mistral deepseek <new>)`
+2. `Endpoint.provider_options/0` — append `{"<Display>", "<key>"}` tuple
+3. `Endpoint.default_base_url/1` — clause returning the provider's
+   `<base>/v1` URL
+4. `Endpoint.provider_label/1` — clause returning brand name (kept
+   un-translated by design — see the doc on that function)
+
+The form's picker filter, model fetcher, base_url resolution, and
+chat completion path are all already provider-agnostic. The fourth
+provider works without further code changes provided its API is
+OpenAI-compatible at `<base_url>/chat/completions` and `/models`.
+
+### Form picker — reflects current provider, never auto-picks
+
+The picker filters connections to whichever provider is currently
+selected on the dropdown. Switching providers (e.g. OpenRouter →
+Mistral) clears any selected integration, the model list, the
+selected_model assign, AND nils `base_url` so the changeset's
+`maybe_set_default_base_url/1` picks up the new provider's default
+URL. The picker NEVER auto-selects a single available connection —
+even when only one exists, the operator must pick explicitly so the
+form's display matches the endpoint's actual stored state. See
+"Picker reflects state, never auto-picks" below for the policy
+rationale.
+
+### Dynamic model selector
+
+`OpenRouterClient.fetch_models_grouped/2` accepts two opts that make
+it provider-agnostic:
+
+- `:base_url` — overrides the hardcoded OpenRouter URL when set. Lets
+  the same fetch logic hit Mistral / DeepSeek `/models` endpoints
+  without forking the code.
+- `:fallback_provider` — group key for IDs that don't follow
+  OpenRouter's `provider/model` slash convention. Mistral's
+  `"mistral-large-latest"` and DeepSeek's `"deepseek-chat"` lack the
+  slash; without this, each model would land in its own one-off group
+  (the picker would render dozens of single-model groups).
+
+`Web.EndpointForm.current_models_base_url/1` resolves the URL: prefers
+the saved endpoint's `base_url` (in case the operator overrode it),
+falls back to the schema default for the currently-selected provider,
+then to OpenRouter's URL as a last resort. Necessary because new
+endpoints don't have a saved `base_url` yet — the form-side
+`current_provider` assign is the source of truth.
+
+`OpenRouterClient.@timeout` is 15s for `/models` and `/auth/key`
+traffic — both are lightweight metadata endpoints. Chat completions
+have their own 120s budget in `Completion.chat_completion/3`.
+
+### Loading-state UX
+
+`Web.EndpointForm` tracks four assigns through the model-fetch
+lifecycle: `models_loading`, `models_loading_slow`, `models_error`,
+and `model_fetch_slow_timer`. Two private helpers
+(`start_model_fetch_indicators/1`, `stop_model_fetch_indicators/1`)
+consolidate the lifecycle plumbing across all five entry points
+that initiate or complete a fetch.
+
+- 10s after the fetch starts, a `:model_fetch_slow` `handle_info`
+  fires and flips `models_loading_slow` so the spinner gains a
+  "(taking longer than usual — the provider may be slow)" hint. The
+  handler is idempotent — if the fetch already completed it's a
+  no-op.
+- On failure, the error pane gets a Retry button (the new
+  `"retry_model_fetch"` event) when the integration is still
+  connected. Re-fires `:fetch_models_from_integration` with the same
+  active connection so the operator can recover from a transient
+  upstream error (5xx, timeout, rate-limit) without re-picking.
+
+### Reasoning capture
+
+Reasoning models (DeepSeek-R1, Mistral Magistral, OpenAI o-series,
+Anthropic extended thinking) return their chain-of-thought alongside
+the final answer. `Completion.extract_reasoning/1` walks three known
+field-name shapes and returns the first non-empty binary it finds:
+
+| Provider / shape | Field on `message` |
+|---|---|
+| OpenRouter (and what it proxies) | `reasoning` |
+| DeepSeek native API | `reasoning_content` |
+| Some others | `thinking` |
+
+The extracted trace is persisted to
+`phoenix_kit_ai_requests.metadata.response_reasoning` (in
+`PhoenixKitAI.log_request/7`) and rendered in the admin Usage page's
+request-details modal as a collapsible "Reasoning" section
+(collapsed by default — chains-of-thought routinely run 5-50× the
+length of the answer).
+
+Subject to the same `capture_request_content?/0` privacy gate as
+`response` content — when content capture is off, reasoning is
+dropped too. Reasoning can mirror prompt content and is
+PII-equivalent.
+
 ## Pinning endpoints to a specific integration
 
 Each AI endpoint references a specific `PhoenixKit.Integrations`
@@ -236,6 +353,13 @@ V107 with backfill from existing `provider` strings). The form's
 `integration_uuid` on save; `OpenRouterClient.resolve_api_key/1` looks
 up credentials by that uuid at request time — no guessing, no
 per-provider fallback.
+
+Provider-string-or-uuid resolution converges on
+`PhoenixKit.Integrations.resolve_to_uuid/1` (core primitive added in
+the strict-UUID flip). Both `OpenRouterClient.lookup_uuid_for_provider/1`
+(lazy on-read promotion) and `PhoenixKitAI.resolve_provider_to_uuid/1`
+(V107 migration sweep) delegate to it — single regex + dispatch +
+provider:name split lives in core, no duplication in this module.
 
 Renaming or re-validating the integration on the admin side doesn't
 break the endpoint's reference: uuids are stable across renames
