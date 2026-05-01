@@ -552,10 +552,13 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       # ("anthropic/claude-3-opus" on OpenRouter, "mistral-large-latest"
       # on Mistral) and a stale id from the previous provider would
       # silently survive into save if the operator never re-picked.
+      # Use "" rather than nil — the template's `params["model"] ||
+      # @endpoint.model` fallback would otherwise resurface the saved
+      # model (nil is falsy in Elixir, "" is truthy).
       params =
         params
-        |> Map.put("base_url", nil)
-        |> Map.put("model", nil)
+        |> Map.put("base_url", "")
+        |> Map.put("model", "")
 
       socket =
         socket
