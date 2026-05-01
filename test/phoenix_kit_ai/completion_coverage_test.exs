@@ -11,6 +11,8 @@ defmodule PhoenixKitAI.CompletionCoverageTest do
 
   use PhoenixKitAI.DataCase, async: false
 
+  import Ecto.Query
+
   alias PhoenixKitAI.{Completion, Endpoint, Prompt}
 
   setup do
@@ -533,5 +535,169 @@ defmodule PhoenixKitAI.CompletionCoverageTest do
       empty = %Prompt{content: "", enabled: true}
       assert {:error, {:prompt_error, :empty_content}} = PhoenixKitAI.validate_prompt(empty)
     end
+  end
+
+  # Regression suite for the silent default-name fallback bug
+  # (2026-05-01). validate_endpoint/1, integration_warning/1, and
+  # :fetch_models_from_integration all used to call credential APIs
+  # with `endpoint.provider` (the literal "openrouter" string), which
+  # `Integrations.get_credentials/1` parses as `provider:default`. Any
+  # operator whose integration was named anything other than "default"
+  # got `:integration_not_configured` even though the endpoint was
+  # correctly pinned via `integration_uuid` and the actual request
+  # would have succeeded. The whole previous AI suite passed because
+  # every fixture happened to seed `integration:openrouter:default`.
+  #
+  # These tests pin the user's actual scenario: integration is named
+  # something else, and the default-named row does NOT exist. Anyone
+  # who re-introduces the bug breaks them.
+  describe "validate_endpoint regression — non-default integration name" do
+    setup do
+      # Tear down ALL openrouter integration rows. Necessary because:
+      #
+      # 1. The module-level setup seeds `integration:openrouter:default`,
+      #    which would silently satisfy the buggy default-fallback that
+      #    `validate_endpoint` previously did via `endpoint.provider`.
+      #
+      # 2. Hex `phoenix_kit ~> 1.7`'s `Integrations.get_credentials/1`
+      #    has a `find_first_connected` fallback for bare-provider
+      #    lookups — it returns ANY connected openrouter row when the
+      #    explicit `default`-named one is missing. Local core (post
+      #    strict-UUID flip) removed this. Tests need to neutralize it
+      #    so they exercise the same logic in both worlds.
+      clear_all_openrouter_connections()
+      :ok
+    end
+
+    test "complete/3 succeeds for an endpoint pinned by integration_uuid" do
+      stub_response(200, success_payload("hi"))
+      integration_uuid = seed_openrouter("prod-#{System.unique_integer([:positive])}")
+
+      ep =
+        endpoint_fixture(%{
+          # provider stays at the literal "openrouter" — same as what
+          # the picker writes for new endpoints. The buggy code path
+          # would call get_credentials("openrouter") and miss because
+          # there is no integration:openrouter:default row.
+          provider: "openrouter",
+          integration_uuid: integration_uuid
+        })
+        |> clear_api_key()
+
+      assert {:ok, %{"choices" => _}} =
+               PhoenixKitAI.complete(ep.uuid, [%{role: "user", content: "hi"}])
+    end
+
+    test "complete/3 returns :integration_deleted when integration_uuid is unreachable AND no api_key fallback exists" do
+      # Orphan case: the endpoint references a deleted integration row
+      # and has no legacy api_key column to fall back to. Validation
+      # should refuse the request with the right reason — not
+      # silently misroute it.
+      stale_uuid = "01234567-89ab-7def-8000-000000abcdef"
+
+      ep =
+        endpoint_fixture(%{
+          provider: "openrouter",
+          integration_uuid: stale_uuid
+        })
+        |> clear_api_key()
+
+      assert {:error, :integration_deleted} =
+               PhoenixKitAI.complete(ep.uuid, [%{role: "user", content: "hi"}])
+    end
+
+    test "complete/3 succeeds via api_key fallback when integration_uuid is unreachable" do
+      # Mirrors OpenRouterClient.resolve_api_key/1's last-resort branch
+      # AND the post-V107 sweep state. The migration sweep
+      # (`sweep_provider_string_to_integration_uuid/0` in phoenix_kit_ai.ex)
+      # uses `update_all` to stamp integration_uuid, which bypasses the
+      # `maybe_clear_legacy_api_key` changeset hook — so endpoints can
+      # legitimately end up with BOTH integration_uuid set AND api_key
+      # populated. validate_endpoint must agree with resolve_api_key:
+      # a stored api_key keeps the request working even when the pinned
+      # integration goes missing.
+      stub_response(200, success_payload("hi"))
+      stale_uuid = "01234567-89ab-7def-8000-000000abcdef"
+
+      # Build via fixture (api_key set, integration_uuid nil), then
+      # force-stamp integration_uuid via update_all (bypassing the
+      # clear-on-set hook) to reach the "both set" state.
+      ep =
+        endpoint_fixture(%{provider: "openrouter", api_key: "sk-or-v1-legacy-fallback"})
+        |> stamp_integration_uuid(stale_uuid)
+
+      assert {:ok, %{"choices" => _}} =
+               PhoenixKitAI.complete(ep.uuid, [%{role: "user", content: "hi"}])
+    end
+
+    test "complete/3 fails with :integration_not_configured when nothing is wired" do
+      # No integration_uuid, no api_key, default-named row was deleted
+      # in setup. The function should refuse cleanly rather than
+      # silently falling back to anything.
+      #
+      # Ecto's `cast/3` strips `""` to nil under default empty_values,
+      # so we can't pass `api_key: ""` through the changeset without it
+      # becoming nil and tripping the DB's NOT NULL constraint. Insert
+      # via the standard fixture, then clear api_key via update_all
+      # (bypasses cast). This matches what production does — endpoints
+      # whose api_key is "" got there via `maybe_clear_legacy_api_key`'s
+      # `put_change`, which also bypasses cast's empty_values handling.
+      ep =
+        endpoint_fixture(%{
+          provider: "openrouter",
+          integration_uuid: nil
+        })
+        |> clear_api_key()
+
+      assert {:error, :integration_not_configured} =
+               PhoenixKitAI.complete(ep.uuid, [%{role: "user", content: "hi"}])
+    end
+  end
+
+  defp clear_api_key(endpoint) do
+    {1, _} =
+      from(e in PhoenixKitAI.Endpoint, where: e.uuid == ^endpoint.uuid)
+      |> PhoenixKitAI.Test.Repo.update_all(set: [api_key: ""])
+
+    PhoenixKitAI.get_endpoint!(endpoint.uuid)
+  end
+
+  defp stamp_integration_uuid(endpoint, integration_uuid) do
+    {1, _} =
+      from(e in PhoenixKitAI.Endpoint, where: e.uuid == ^endpoint.uuid)
+      |> PhoenixKitAI.Test.Repo.update_all(set: [integration_uuid: integration_uuid])
+
+    PhoenixKitAI.get_endpoint!(endpoint.uuid)
+  end
+
+  # Wipes every `integration:openrouter:*` row. Used by the regression
+  # suite to neutralize Hex 1.7's `find_first_connected` bare-provider
+  # fallback (removed in local core post strict-UUID flip) so the
+  # tests exercise identical logic in both worlds.
+  defp clear_all_openrouter_connections do
+    PhoenixKitAI.Test.Repo.query!(
+      "DELETE FROM phoenix_kit_settings WHERE key LIKE 'integration:openrouter:%'"
+    )
+
+    :ok
+  end
+
+  defp seed_openrouter(name) do
+    key = "integration:openrouter:#{name}"
+
+    {:ok, _} =
+      PhoenixKit.Settings.update_json_setting(key, %{
+        "api_key" => "sk-test-prod-key",
+        "status" => "connected",
+        "provider" => "openrouter",
+        "name" => name,
+        "auth_type" => "api_key"
+      })
+
+    %{uuid: uuid} =
+      PhoenixKit.Integrations.list_connections("openrouter")
+      |> Enum.find(&(&1.name == name))
+
+    uuid
   end
 end

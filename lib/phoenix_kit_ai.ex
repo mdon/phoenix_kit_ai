@@ -2368,18 +2368,49 @@ defmodule PhoenixKitAI do
       endpoint.model == nil or endpoint.model == "" ->
         {:error, :endpoint_no_model}
 
-      PhoenixKit.Integrations.get_credentials(endpoint.provider) == {:error, :deleted} ->
-        {:error, :integration_deleted}
-
-      not PhoenixKit.Integrations.connected?(endpoint.provider) ->
-        {:error, :integration_not_configured}
-
       endpoint.enabled == false ->
         {:error, :endpoint_disabled}
 
       true ->
-        {:ok, endpoint}
+        case endpoint_credential_status(endpoint) do
+          :ok -> {:ok, endpoint}
+          {:error, _} = err -> err
+        end
     end
+  end
+
+  # Mirrors the lookup ladder that `OpenRouterClient.resolve_api_key/1`
+  # walks at request time so validation can't disagree with the actual
+  # credential resolution: integration_uuid first, then the legacy
+  # `provider` column (which carried a uuid pre-V107), then the legacy
+  # `api_key` column. Validation only fails when ALL three sources are
+  # empty — same as the request path. The error reason distinguishes
+  # between "you pinned an integration that was deleted" (orphan) and
+  # "you never wired anything up" so the user-facing message is honest.
+  defp endpoint_credential_status(endpoint) do
+    cond do
+      match?({:ok, _}, lookup_credentials(endpoint.integration_uuid)) ->
+        :ok
+
+      match?({:ok, _}, lookup_credentials(endpoint.provider)) ->
+        :ok
+
+      is_binary(endpoint.api_key) and endpoint.api_key != "" ->
+        :ok
+
+      is_binary(endpoint.integration_uuid) and endpoint.integration_uuid != "" ->
+        {:error, :integration_deleted}
+
+      true ->
+        {:error, :integration_not_configured}
+    end
+  end
+
+  defp lookup_credentials(nil), do: {:error, :not_configured}
+  defp lookup_credentials(""), do: {:error, :not_configured}
+
+  defp lookup_credentials(key) when is_binary(key) do
+    PhoenixKit.Integrations.get_credentials(key)
   end
 
   defp merge_endpoint_opts(endpoint, opts) do

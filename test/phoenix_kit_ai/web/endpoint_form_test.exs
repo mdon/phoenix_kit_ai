@@ -144,9 +144,18 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
     # not a free-text input. Pinning the helper directly keeps the
     # branches honest.
 
-    test "returns nil for nil/empty provider" do
-      assert EndpointForm.integration_warning(%{provider: nil, api_key: nil}) == nil
-      assert EndpointForm.integration_warning(%{provider: "", api_key: nil}) == nil
+    test "warns when nothing is configured (no integration_uuid, no provider, no api_key)" do
+      # Pre-fix this returned nil because the function only knew about
+      # `provider` and quietly skipped when it was empty. That hid the
+      # "you saved a totally unconfigured endpoint" case from the
+      # operator. Now the empty-everything endpoint surfaces the
+      # "No integration configured" warning.
+      result_nil = EndpointForm.integration_warning(%{provider: nil, api_key: nil})
+      result_empty = EndpointForm.integration_warning(%{provider: "", api_key: nil})
+
+      assert is_binary(result_nil)
+      assert result_nil =~ "No integration configured"
+      assert result_empty == result_nil
     end
 
     test "returns nil when there is a non-empty legacy api_key (fallback path works)" do
@@ -185,6 +194,60 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
       assert is_binary(result)
       assert result =~ "is not connected"
     end
+
+    test "returns nil when integration_uuid resolves to a connected integration" do
+      # Pre-warning fix, this branch was unreachable — the function
+      # only checked `provider`. After the fix, integration_uuid takes
+      # precedence and a connected pinned integration silences the
+      # warning regardless of whatever `provider` still holds (it
+      # defaults to the literal "openrouter" for new endpoints).
+      %{uuid: uuid} =
+        seed_openrouter_connection("warn-ok-#{System.unique_integer([:positive])}",
+          data: %{"api_key" => "sk-test-warn", "status" => "connected"}
+        )
+
+      result =
+        EndpointForm.integration_warning(%{
+          integration_uuid: uuid,
+          provider: "openrouter",
+          api_key: nil
+        })
+
+      assert result == nil
+    end
+
+    test "returns the warning for a pinned integration that isn't connected" do
+      # `integration_uuid` set but the row isn't reachable (deleted /
+      # unreachable). With no api_key fallback, the request would
+      # fail — surface that.
+      stale_uuid = "01234567-89ab-7def-8000-000000warning"
+
+      result =
+        EndpointForm.integration_warning(%{
+          integration_uuid: stale_uuid,
+          provider: "openrouter",
+          api_key: nil
+        })
+
+      assert is_binary(result)
+      assert result =~ "selected integration is not connected"
+    end
+
+    test "returns nil when integration_uuid is unreachable but api_key fallback exists" do
+      # Even with a broken pin, a stored legacy api_key keeps the
+      # request working via OpenRouterClient.resolve_api_key/1's final
+      # fallback. No warning needed.
+      stale_uuid = "01234567-89ab-7def-8000-000000warning"
+
+      result =
+        EndpointForm.integration_warning(%{
+          integration_uuid: stale_uuid,
+          provider: "openrouter",
+          api_key: "sk-or-v1-legacy"
+        })
+
+      assert result == nil
+    end
   end
 
   describe "load_endpoint active_connection wiring" do
@@ -204,14 +267,20 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
       assert assigns.integration_connected == false
     end
 
-    test "new endpoint with exactly one connection auto-selects it",
+    test "new endpoint with exactly one connection still leaves picker empty",
          %{conn: conn} do
-      %{uuid: uuid} =
-        seed_openrouter_connection("auto-#{System.unique_integer([:positive])}")
+      # The picker mirrors the endpoint's actual stored state. A new
+      # endpoint has no integration pinned, so the picker shows nothing
+      # selected — even when only one connection exists. Auto-selecting
+      # would mask "no integration set" with "an integration is set".
+      seed_openrouter_connection("auto-#{System.unique_integer([:positive])}")
 
       {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
 
-      assert :sys.get_state(view.pid).socket.assigns.active_connection == uuid
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.active_connection == nil
+      assert assigns.selected_uuids == []
+      assert assigns.integration_connected == false
     end
 
     test "edit endpoint whose provider matches a live connection keeps it",
@@ -244,17 +313,22 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
       refute assigns.integration_connected
     end
 
-    test "edit endpoint with stale provider + exactly one connection auto-selects it",
+    test "edit endpoint with stale provider + exactly one connection leaves picker empty",
          %{conn: conn} do
-      %{uuid: uuid} =
-        seed_openrouter_connection("solo-#{System.unique_integer([:positive])}")
+      # Stale provider doesn't resolve, integration_uuid is nil, only
+      # one other connection exists — the picker still shows nothing
+      # selected. The endpoint isn't pinned to that connection, so
+      # surfacing it as "selected" would be a lie.
+      seed_openrouter_connection("solo-#{System.unique_integer([:positive])}")
 
       stale_uuid = "01234567-89ab-7def-8000-0000000abcde"
       endpoint = fixture_endpoint(provider: stale_uuid)
 
       {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
 
-      assert :sys.get_state(view.pid).socket.assigns.active_connection == uuid
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.active_connection == nil
+      assert assigns.selected_uuids == []
     end
   end
 
@@ -360,6 +434,71 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.active_connection == uuid
       assert assigns.form.params["integration_uuid"] == uuid
+    end
+
+    test "clicking the selected card again deselects it",
+         %{conn: conn} do
+      # The picker emits action="deselect" when the currently-selected
+      # card is clicked. The form should clear active_connection,
+      # selected_uuids, and write nil into form.params so save
+      # persists the unpinning instead of silently re-using the
+      # previously-stamped value.
+      %{uuid: uuid} =
+        seed_openrouter_connection("toggle-#{System.unique_integer([:positive])}")
+
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
+
+      # Pick it.
+      view
+      |> render_hook("select_openrouter_connection", %{
+        "uuid" => uuid,
+        "action" => "select"
+      })
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.active_connection == uuid
+      assert assigns.selected_uuids == [uuid]
+      assert assigns.form.params["integration_uuid"] == uuid
+
+      # Click it again — the picker emits action="deselect".
+      view
+      |> render_hook("select_openrouter_connection", %{
+        "uuid" => uuid,
+        "action" => "deselect"
+      })
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.active_connection == nil
+      assert assigns.selected_uuids == []
+      assert assigns.integration_connected == false
+      assert assigns.form.params["integration_uuid"] == nil
+    end
+
+    test "deselect on an existing endpoint clears integration_uuid on save",
+         %{conn: conn} do
+      # Edit an endpoint that's pinned to a connection, deselect via
+      # the picker, save — the DB row should end up with
+      # integration_uuid = nil (not the original uuid).
+      %{uuid: integration_uuid} =
+        seed_openrouter_connection("clear-on-save-#{System.unique_integer([:positive])}")
+
+      endpoint = fixture_endpoint(integration_uuid: integration_uuid, provider: "openrouter")
+
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
+
+      # Sanity: load_endpoint resolved the pin.
+      assert :sys.get_state(view.pid).socket.assigns.active_connection == integration_uuid
+
+      view
+      |> render_hook("select_openrouter_connection", %{
+        "uuid" => integration_uuid,
+        "action" => "deselect"
+      })
+
+      view |> form("form", endpoint: %{name: endpoint.name}) |> render_submit()
+
+      reloaded = PhoenixKitAI.get_endpoint!(endpoint.uuid)
+      assert reloaded.integration_uuid == nil
     end
   end
 

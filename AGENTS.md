@@ -264,18 +264,26 @@ copy button. Lets the operator recover the key and paste it into a
 new Integration without bouncing back to OpenRouter. The card
 disappears once an integration is selected and saved.
 
-### Orphaned integration handling
+### Picker reflects state, never auto-picks
 
-When an endpoint's `integration_uuid` is set but doesn't resolve to
-a current connection (the integration was deleted since the
-endpoint was wired up), `load_endpoint/2` keeps `active_connection`
-nil — it does NOT silently auto-pick an unrelated single connection
-that happens to be available. The orphaned uuid flows through
-`:selected_uuids` to the integration picker, which renders its
-"Integration deleted — Missing" warning card. The operator has to
-explicitly pick a new connection. The same logic protects
-`reload_connections/1` against silently rebinding endpoints when
-integrations are added or removed via PubSub.
+The integration picker is a status display, not a convenience
+shortcut. `load_endpoint/2` and `reload_connections/1` only set
+`active_connection` to a uuid the endpoint is actually pinned to —
+either via `integration_uuid` or via the legacy `provider` field
+when it carried the uuid pre-V107. If nothing is pinned, the picker
+shows no selection, even when only one connection exists. This
+keeps the form honest: an operator scanning a new endpoint sees
+"no integration set" and knows to pick one, instead of being misled
+by a single available connection rendering as already-selected.
+
+When `integration_uuid` is set but doesn't resolve to a current
+connection (the integration was deleted since the endpoint was
+wired up), the orphaned uuid flows through `:selected_uuids` to the
+picker, which renders its "Integration deleted — Missing" warning
+card. The operator has to explicitly pick a new connection. The
+same logic protects `reload_connections/1` against silently
+rebinding endpoints when integrations are added or removed via
+PubSub.
 
 ### Endpoints list — connection-health badges + integration row
 

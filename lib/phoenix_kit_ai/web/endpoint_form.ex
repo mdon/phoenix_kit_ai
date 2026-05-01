@@ -167,31 +167,18 @@ defmodule PhoenixKitAI.Web.EndpointForm do
   end
 
   defp load_endpoint(socket, nil) do
-    changeset = AI.change_endpoint(%Endpoint{})
-    connections = socket.assigns.openrouter_connections
-
-    # Auto-select if there's exactly one connection
-    {active, connected} =
-      case connections do
-        [%{uuid: uuid}] -> {uuid, Integrations.connected?(uuid)}
-        _ -> {nil, false}
-      end
-
-    socket =
-      socket
-      |> assign(:page_title, "New AI Endpoint")
-      |> assign(:endpoint, nil)
-      |> assign(:form, to_form(changeset))
-      |> assign(:active_connection, active)
-      |> assign(:selected_uuids, if(active, do: [active], else: []))
-      |> assign(:integration_connected, connected)
-
-    if connected do
-      send(self(), :fetch_models_from_integration)
-      assign(socket, :models_loading, true)
-    else
-      socket
-    end
+    # New endpoint: nothing is pre-selected. The picker reflects the
+    # endpoint's actual state (no integration yet), so the operator
+    # explicitly picks one. Auto-selecting a single available connection
+    # would mask "no integration set" with "an integration is set" and
+    # confuse anyone scanning the form to verify wiring.
+    socket
+    |> assign(:page_title, "New AI Endpoint")
+    |> assign(:endpoint, nil)
+    |> assign(:form, to_form(AI.change_endpoint(%Endpoint{})))
+    |> assign(:active_connection, nil)
+    |> assign(:selected_uuids, [])
+    |> assign(:integration_connected, false)
   end
 
   defp load_endpoint(socket, id) do
@@ -211,14 +198,13 @@ defmodule PhoenixKitAI.Web.EndpointForm do
         # so endpoints that pre-date V107's backfill still light up the
         # right picker entry.
         #
-        # Orphan handling: when `integration_uuid` is set but doesn't
-        # match any current connection (the integration was deleted
-        # since this endpoint was wired up), keep `active = nil` so we
-        # don't silently auto-pick an unrelated single connection —
-        # that would mask the deletion. Capture the orphaned uuid in
-        # `orphaned_integration_uuid` so the picker can render its
-        # "Integration deleted" warning card via `selected_uuids` and
-        # the user picks a new integration explicitly.
+        # The picker reflects the endpoint's actual stored state — it
+        # never auto-picks a connection the endpoint isn't pinned to.
+        # When `integration_uuid` is set but unresolvable, the orphan
+        # uuid flows through `selected_uuids` so the picker renders its
+        # "Integration deleted" warning card. When nothing is pinned,
+        # `active` stays nil and the picker shows no selection — the
+        # operator picks one explicitly.
         {active, orphaned_integration_uuid} =
           cond do
             endpoint.integration_uuid &&
@@ -226,14 +212,11 @@ defmodule PhoenixKitAI.Web.EndpointForm do
               {endpoint.integration_uuid, nil}
 
             endpoint.integration_uuid ->
-              # Set but unresolvable — surface the orphan, no auto-pick.
+              # Set but unresolvable — surface the orphan.
               {nil, endpoint.integration_uuid}
 
             endpoint.provider && Enum.any?(connections, &(&1.uuid == endpoint.provider)) ->
               {endpoint.provider, nil}
-
-            match?([_], connections) ->
-              {hd(connections).uuid, nil}
 
             true ->
               {nil, nil}
@@ -449,6 +432,27 @@ defmodule PhoenixKitAI.Web.EndpointForm do
   end
 
   @impl true
+  def handle_event("select_openrouter_connection", %{"action" => "deselect"}, socket) do
+    # Clicking the currently-selected card unpicks it. Write nil into
+    # the form params so save/2 persists the unpinning instead of
+    # re-using the last-stamped value.
+    updated_params = Map.put(socket.assigns.form.params, "integration_uuid", nil)
+    form = %{socket.assigns.form | params: updated_params}
+
+    socket =
+      socket
+      |> assign(:form, form)
+      |> assign(:active_connection, nil)
+      |> assign(:selected_uuids, [])
+      |> assign(:integration_connected, false)
+      |> assign(:models, [])
+      |> assign(:models_grouped, [])
+      |> assign(:models_loading, false)
+      |> assign(:models_error, nil)
+
+    {:noreply, socket}
+  end
+
   def handle_event("select_openrouter_connection", %{"uuid" => uuid}, socket) do
     # Pin the endpoint to the chosen integration row by uuid.
     updated_params = Map.put(socket.assigns.form.params, "integration_uuid", uuid)
@@ -482,15 +486,14 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
     params = Map.put(params, "provider_settings", provider_settings)
 
-    # Pin to the chosen integration via its uuid. The legacy `provider`
-    # column stays at whatever it was (defaults to "openrouter") — not
-    # used for resolution anymore, just kept until the column is dropped.
-    params =
-      if socket.assigns[:active_connection] do
-        Map.put(params, "integration_uuid", socket.assigns.active_connection)
-      else
-        params
-      end
+    # Stamp integration_uuid from the picker's current state — a uuid
+    # when one is selected, nil when the operator unpicked (or never
+    # picked one). Always writing means an explicit deselect actually
+    # clears the column on save instead of silently retaining the
+    # previously-stored value. The legacy `provider` column stays at
+    # whatever it was (defaults to "openrouter") — not used for
+    # resolution anymore, just kept until the column is dropped.
+    params = Map.put(params, "integration_uuid", socket.assigns[:active_connection])
 
     # Parse numeric fields and string lists
     params =
@@ -525,10 +528,6 @@ defmodule PhoenixKitAI.Web.EndpointForm do
         # to a different connection; surface the orphan to the picker.
         endpoint_uuid && not Enum.any?(connections, &(&1.uuid == endpoint_uuid)) ->
           {nil, endpoint_uuid}
-
-        # Only one connection AND no prior pin — auto-select it.
-        match?([_], connections) ->
-          {hd(connections).uuid, nil}
 
         true ->
           {nil, nil}
@@ -640,25 +639,50 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @doc false
   # Public for testability. Returns the soft-warning string for an
-  # endpoint whose `provider` points at a disconnected integration AND
-  # has no legacy `api_key` fallback. Returns nil when either branch
-  # of the safety net keeps the endpoint working.
-  def integration_warning(%{provider: provider, api_key: api_key}) do
+  # endpoint whose chosen integration isn't reachable AND has no legacy
+  # `api_key` fallback. Returns nil when any branch of the resolution
+  # ladder keeps the endpoint working at request time. Mirrors the
+  # ladder in `OpenRouterClient.resolve_api_key/1` so the warning can't
+  # disagree with what the next request would actually do.
+  def integration_warning(endpoint) when is_map(endpoint) do
+    integration_uuid = Map.get(endpoint, :integration_uuid)
+    provider = Map.get(endpoint, :provider)
+    api_key = Map.get(endpoint, :api_key)
+
     cond do
-      provider in [nil, ""] ->
+      # Endpoint pinned via integration_uuid — that specific row is
+      # the source of truth, regardless of what the legacy `provider`
+      # column still says.
+      is_binary(integration_uuid) and integration_uuid != "" and
+          Integrations.connected?(integration_uuid) ->
         nil
 
-      Integrations.connected?(provider) ->
-        nil
-
+      # Legacy endpoint with a stored api_key — fallback path still works.
       is_binary(api_key) and api_key != "" ->
-        # Legacy endpoint with a stored key — fallback path still works.
         nil
+
+      # Pinned to an integration that isn't reachable — surface that.
+      is_binary(integration_uuid) and integration_uuid != "" ->
+        gettext(
+          "The selected integration is not connected — requests will fail until you connect it in Settings → Integrations."
+        )
+
+      # No integration_uuid, but the legacy `provider` column may
+      # carry a uuid (pre-V107) or a `provider:name` string. The
+      # dual-input shim handles both shapes.
+      is_binary(provider) and provider != "" ->
+        if Integrations.connected?(provider) do
+          nil
+        else
+          gettext(
+            "The %{provider} integration is not connected — requests will fail until you connect it in Settings → Integrations.",
+            provider: "\"#{provider}\""
+          )
+        end
 
       true ->
         gettext(
-          "The %{provider} integration is not connected — requests will fail until you connect it in Settings → Integrations.",
-          provider: "\"#{provider}\""
+          "No integration configured for this endpoint. Set up the API key in Settings → Integrations."
         )
     end
   end
@@ -704,9 +728,14 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @impl true
   def handle_info(:fetch_models_from_integration, socket) do
-    active_key = socket.assigns[:active_connection] || "openrouter"
+    # Only fetch models for the picker's actual selection. Falling
+    # back to "any openrouter:default connection" silently misled
+    # operators whose integration was named anything other than
+    # "default" (and contradicted the picker's "reflect state, never
+    # auto-pick" policy).
+    active_key = socket.assigns[:active_connection]
 
-    case Integrations.get_credentials(active_key) do
+    case active_key && Integrations.get_credentials(active_key) do
       {:ok, %{"api_key" => api_key}} when is_binary(api_key) and api_key != "" ->
         send(self(), {:fetch_models, api_key})
         {:noreply, socket}
