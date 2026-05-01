@@ -21,9 +21,9 @@ defmodule PhoenixKitAI.Completion do
 
   require Logger
 
+  alias PhoenixKitAI.Endpoint
   alias PhoenixKitAI.OpenRouterClient
 
-  @base_url "https://openrouter.ai/api/v1"
   @timeout 120_000
 
   @doc """
@@ -359,9 +359,27 @@ defmodule PhoenixKitAI.Completion do
   end
 
   defp build_url(endpoint, path) do
-    base = endpoint.base_url || @base_url
-    # Remove trailing slash from base if present
-    base = String.trim_trailing(base, "/")
-    "#{base}#{path}"
+    # Falls back to the provider's canonical default base url when the
+    # endpoint row has none — covers legacy rows persisted before the
+    # changeset gained `maybe_set_default_base_url`. Hardcoding
+    # OpenRouter's URL here would silently misroute Mistral / DeepSeek
+    # traffic.
+    base =
+      cond do
+        is_binary(endpoint.base_url) and endpoint.base_url != "" -> endpoint.base_url
+        is_binary(endpoint.provider) -> Endpoint.default_base_url(endpoint.provider)
+        true -> nil
+      end
+
+    case base do
+      nil ->
+        raise ArgumentError,
+              "endpoint #{inspect(endpoint.uuid)} has no base_url and " <>
+                "provider #{inspect(endpoint.provider)} has no default — " <>
+                "edit the endpoint to set a base_url"
+
+      base ->
+        "#{String.trim_trailing(base, "/")}#{path}"
+    end
   end
 end

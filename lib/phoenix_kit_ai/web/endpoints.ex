@@ -27,6 +27,7 @@ defmodule PhoenixKitAI.Web.Endpoints do
   alias PhoenixKit.Utils.Date, as: UtilsDate
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitAI, as: AI
+  alias PhoenixKitAI.Endpoint
 
   @sort_options [
     {:id, "ID"},
@@ -494,15 +495,18 @@ defmodule PhoenixKitAI.Web.Endpoints do
 
     endpoint_stats = AI.get_endpoint_usage_stats()
 
-    # Map of integration_uuid → connection (`%{name, data}`) for the
-    # current OpenRouter connections. Loaded once so per-endpoint
+    # Map of integration_uuid → connection (`%{name, data}`) for every
+    # provider this module supports. Loaded once so per-endpoint
     # rendering can pull both the health status AND the integration
     # name + masked api_key without an N+1 of
     # `Integrations.connected?/1` / `get_credentials/1` calls. An
     # endpoint whose `integration_uuid` is not a key in this map is
-    # an orphan (the integration row was deleted).
+    # an orphan (the integration row was deleted) — including a
+    # Mistral- or DeepSeek-bound endpoint whose connection lives under
+    # a non-openrouter provider key.
     integrations_by_uuid =
-      PhoenixKit.Integrations.list_connections("openrouter")
+      Endpoint.valid_providers()
+      |> Enum.flat_map(&PhoenixKit.Integrations.list_connections/1)
       |> Map.new(fn conn -> {conn.uuid, conn} end)
 
     socket
