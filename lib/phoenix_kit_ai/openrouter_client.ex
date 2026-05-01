@@ -29,7 +29,13 @@ defmodule PhoenixKitAI.OpenRouterClient do
   require Logger
 
   @base_url "https://openrouter.ai/api/v1"
-  @timeout 30_000
+  # 15s is generous for `/models` and `/auth/key` — both are
+  # lightweight metadata endpoints that respond in <5s on a healthy
+  # connection. The previous 30s left operators staring at a spinner
+  # for a full half-minute when something was wedged. Chat completions
+  # have their own 120s budget in `Completion.chat_completion/3`;
+  # this constant only governs validate + model-list traffic.
+  @timeout 15_000
 
   # OpenRouter's /models endpoint does not return embedding models, so we ship
   # a curated list. This table is manually maintained — bump the date when
@@ -481,32 +487,15 @@ defmodule PhoenixKitAI.OpenRouterClient do
   defp maybe_promote_legacy_provider(_endpoint, _resolved), do: :ok
 
   defp lookup_uuid_for_provider(provider) when is_binary(provider) do
-    cond do
-      Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, provider) ->
-        # Provider is already a uuid string — verify the row exists.
-        case PhoenixKit.Integrations.get_integration(provider) do
-          {:ok, _} -> provider
-          _ -> nil
-        end
-
-      true ->
-        # `provider:name` shape — split and scan the provider's
-        # connections. Uses `list_connections/1` (long-stable API)
-        # rather than `find_uuid_by_provider_name/1` so the lazy
-        # promotion works against phoenix_kit versions that predate
-        # that helper.
-        case String.split(provider, ":", parts: 2) do
-          [base, name] when name != "" ->
-            PhoenixKit.Integrations.list_connections(base)
-            |> Enum.find(fn conn -> conn.name == name end)
-            |> case do
-              %{uuid: uuid} -> uuid
-              _ -> nil
-            end
-
-          _ ->
-            nil
-        end
+    # Delegates to core's dual-input primitive. Previously this helper
+    # carried its own regex + dispatch + provider:name split; the same
+    # pair existed verbatim on `PhoenixKitAI.resolve_provider_to_uuid/1`.
+    # Centralising into `Integrations.resolve_to_uuid/1` removes the
+    # duplication and eliminates the "fourth provider tempts a third
+    # copy-paste" risk.
+    case PhoenixKit.Integrations.resolve_to_uuid(provider) do
+      {:ok, uuid} -> uuid
+      _ -> nil
     end
   rescue
     _ -> nil

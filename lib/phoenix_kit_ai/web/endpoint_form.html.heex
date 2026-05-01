@@ -303,9 +303,34 @@
               <%= if @models_loading do %>
                 <div class="flex items-center gap-2 py-2">
                   <span class="loading loading-spinner loading-sm"></span>
-                  <span class="text-base-content/70">Loading models...</span>
+                  <span class="text-base-content/70">{gettext("Loading models...")}</span>
+                  <%!-- "Still loading" hint after 10s. The provider's
+                       /models endpoint is unusually slow or wedged;
+                       surfacing this lets the operator decide to wait
+                       or cancel the picker out instead of staring at
+                       a silent spinner. --%>
+                  <span :if={@models_loading_slow} class="text-base-content/50 text-sm italic">
+                    {gettext("(taking longer than usual — the provider may be slow)")}
+                  </span>
                 </div>
               <% else %>
+                <%!-- Error pane with retry button. Lets operators
+                     recover from transient upstream failures (5xx,
+                     timeout, rate-limit) without re-picking the
+                     integration. --%>
+                <div :if={@models_error} class="alert alert-error py-2 mb-2">
+                  <.icon name="hero-exclamation-triangle" class="w-4 h-4" />
+                  <span class="text-sm">{@models_error}</span>
+                  <button
+                    :if={@integration_connected}
+                    type="button"
+                    phx-click="retry_model_fetch"
+                    phx-disable-with={gettext("Retrying…")}
+                    class="btn btn-sm btn-ghost ml-auto"
+                  >
+                    <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("Retry")}
+                  </button>
+                </div>
                 <%= if Enum.empty?(@models_grouped) do %>
                   <%!-- Fallback to text input when no models loaded --%>
                   <div class="join w-full">

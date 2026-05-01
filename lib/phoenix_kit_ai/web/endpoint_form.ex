@@ -152,6 +152,8 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       |> assign(:models, [])
       |> assign(:models_grouped, [])
       |> assign(:models_loading, false)
+      |> assign(:models_loading_slow, false)
+      |> assign(:model_fetch_slow_timer, nil)
       |> assign(:models_error, nil)
       |> assign(:selected_model, nil)
       |> assign(:selected_provider, nil)
@@ -250,7 +252,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
         # Load models if integration is connected
         if connected do
           send(self(), :fetch_models_from_integration)
-          assign(socket, :models_loading, true)
+          start_model_fetch_indicators(socket)
         else
           socket
         end
@@ -342,6 +344,8 @@ defmodule PhoenixKitAI.Web.EndpointForm do
         |> assign(:selected_model, nil)
         |> assign(:selected_provider, nil)
         |> assign(:provider_models, [])
+        |> stop_model_fetch_indicators()
+        |> assign(:models_error, nil)
 
       {params, socket}
     else
@@ -484,7 +488,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       |> assign(:integration_connected, false)
       |> assign(:models, [])
       |> assign(:models_grouped, [])
-      |> assign(:models_loading, false)
+      |> stop_model_fetch_indicators()
       |> assign(:models_error, nil)
 
     {:noreply, socket}
@@ -507,7 +511,23 @@ defmodule PhoenixKitAI.Web.EndpointForm do
     # Reload models with new connection
     if connected do
       send(self(), :fetch_models_from_integration)
-      {:noreply, assign(socket, :models_loading, true)}
+      {:noreply, start_model_fetch_indicators(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("retry_model_fetch", _params, socket) do
+    # Re-trigger `:fetch_models_from_integration` after a previous
+    # fetch failed. Surfaced via the retry button on the model picker
+    # error pane so operators don't have to re-pick the integration
+    # to recover from a transient upstream failure (5xx, timeout,
+    # rate-limit). The handler is a no-op if the active integration
+    # isn't connected anymore — same gate as the initial fetch.
+    if socket.assigns[:integration_connected] do
+      send(self(), :fetch_models_from_integration)
+      {:noreply, start_model_fetch_indicators(socket)}
     else
       {:noreply, socket}
     end
@@ -796,8 +816,12 @@ defmodule PhoenixKitAI.Web.EndpointForm do
         {:noreply, socket}
 
       _ ->
-        {:noreply,
-         assign(socket, models_loading: false, models_error: "No API key configured")}
+        socket =
+          socket
+          |> stop_model_fetch_indicators()
+          |> assign(:models_error, "No API key configured")
+
+        {:noreply, socket}
     end
   end
 
@@ -831,7 +855,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
         socket =
           socket
-          |> assign(:models_loading, false)
+          |> stop_model_fetch_indicators()
           |> assign(:models, models)
           |> assign(:models_grouped, grouped)
           |> assign(:models_error, nil)
@@ -852,10 +876,25 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
         socket =
           socket
-          |> assign(:models_loading, false)
+          |> stop_model_fetch_indicators()
           |> assign(:models_error, PhoenixKitAI.Errors.message(reason))
 
         {:noreply, socket}
+    end
+  end
+
+  # The integration's `/models` fetch is wedged or slow; the picker
+  # spinner has been spinning for 10s. Surface a "still loading" hint
+  # so the operator knows it's not the UI that's stuck — they can
+  # decide to wait or cancel out. The handler is idempotent: if the
+  # actual fetch already completed, models_loading is false and we
+  # leave models_loading_slow false too (no UI change).
+  @impl true
+  def handle_info(:model_fetch_slow, socket) do
+    if socket.assigns[:models_loading] do
+      {:noreply, assign(socket, :models_loading_slow, true)}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -875,6 +914,42 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   defp find_model(models, model_id) do
     Enum.find(models, fn m -> m.id == model_id end)
+  end
+
+  # Sets the loading indicator and schedules a 10s "still loading"
+  # timer. The timer ref is stashed on the socket so the completion
+  # handlers can cancel it. If the fetch completes before 10s, the
+  # timer fires harmlessly into the no-op branch of the slow handler.
+  # If 10s passes first, the spinner gains a "still loading" hint so
+  # the operator knows it's not a wedged UI.
+  defp start_model_fetch_indicators(socket) do
+    cancel_model_fetch_slow_timer(socket)
+
+    timer_ref = Process.send_after(self(), :model_fetch_slow, 10_000)
+
+    socket
+    |> assign(:models_loading, true)
+    |> assign(:models_loading_slow, false)
+    |> assign(:models_error, nil)
+    |> assign(:model_fetch_slow_timer, timer_ref)
+  end
+
+  # Reset path — fetch completed (success or error). Cancels the
+  # 10s timer if still pending and clears all loading-state assigns.
+  defp stop_model_fetch_indicators(socket) do
+    cancel_model_fetch_slow_timer(socket)
+
+    socket
+    |> assign(:models_loading, false)
+    |> assign(:models_loading_slow, false)
+    |> assign(:model_fetch_slow_timer, nil)
+  end
+
+  defp cancel_model_fetch_slow_timer(socket) do
+    case socket.assigns[:model_fetch_slow_timer] do
+      ref when is_reference(ref) -> Process.cancel_timer(ref)
+      _ -> :ok
+    end
   end
 
   # Resolves the base URL the model fetcher should hit. Prefers the

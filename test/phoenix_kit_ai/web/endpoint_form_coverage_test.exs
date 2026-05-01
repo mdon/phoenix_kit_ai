@@ -409,6 +409,143 @@ defmodule PhoenixKitAI.Web.EndpointFormCoverageTest do
       assert is_binary(html)
     end
 
+    test ":model_fetch_slow flips models_loading_slow when fetch is in progress",
+         %{conn: conn} do
+      # Pin the 10s "still loading" hint behavior. The handler is
+      # idempotent against a completed fetch: only flips when
+      # models_loading is still true.
+      seed_openrouter_connection("slow-hint",
+        data: %{"api_key" => "sk-x", "status" => "connected"}
+      )
+
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
+
+      # Force the LV into "loading" state by setting the assign
+      # directly (would otherwise require an in-flight async fetch).
+      :sys.replace_state(view.pid, fn lv_state ->
+        socket = lv_state.socket
+        socket = %{socket | assigns: Map.put(socket.assigns, :models_loading, true)}
+        %{lv_state | socket: socket}
+      end)
+
+      # Fire the slow-hint message synchronously.
+      send(view.pid, :model_fetch_slow)
+      _ = render(view)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.models_loading_slow == true
+    end
+
+    test ":model_fetch_slow is a no-op when fetch already completed",
+         %{conn: conn} do
+      # If the fetch returned before 10s, the timer fires harmlessly:
+      # models_loading is false, the slow handler should not flip
+      # models_loading_slow on (would render a stale "still loading"
+      # message under a populated dropdown).
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
+
+      # models_loading is false from mount.
+      send(view.pid, :model_fetch_slow)
+      _ = render(view)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.models_loading == false
+      assert assigns.models_loading_slow == false
+    end
+
+    test "retry_model_fetch re-triggers fetch when integration is connected",
+         %{conn: conn} do
+      # Stage: previous fetch failed, models_error is set, integration
+      # is still connected. Clicking Retry should re-fire
+      # `:fetch_models_from_integration` and reset the error.
+      %{uuid: integration_uuid} =
+        seed_openrouter_connection("retry-flow",
+          data: %{"api_key" => "sk-retry", "status" => "connected"}
+        )
+
+      # Stub HTTP so the re-fetch triggered by retry doesn't hit the
+      # network — return a 5xx so the LV ends up at the same error
+      # state we started in (proves the re-fetch happened by virtue
+      # of `models_error` being repopulated). Required because
+      # `start_model_fetch_indicators` clears the error, which would
+      # otherwise leave a misleading `nil` if we asserted right after.
+      stub_module = PhoenixKitAI.Web.EndpointFormCoverageTest.RetryStub
+      Req.Test.stub(stub_module, fn conn -> Plug.Conn.send_resp(conn, 500, "{}") end)
+      Application.put_env(:phoenix_kit_ai, :req_options, plug: {Req.Test, stub_module}, retry: false)
+      on_exit(fn -> Application.delete_env(:phoenix_kit_ai, :req_options) end)
+
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
+      Req.Test.allow(stub_module, self(), view.pid)
+
+      # Force the LV into the "previous fetch failed + integration
+      # selected" state. `active_connection` must be a real uuid so
+      # the credential lookup in `:fetch_models_from_integration`
+      # finds an api_key and proceeds to send `{:fetch_models, _}`.
+      :sys.replace_state(view.pid, fn lv_state ->
+        socket = lv_state.socket
+
+        socket = %{
+          socket
+          | assigns:
+              Map.merge(socket.assigns, %{
+                models_error: "Connection error: :timeout",
+                integration_connected: true,
+                active_connection: integration_uuid,
+                current_provider: "openrouter",
+                models_loading: false,
+                models_loading_slow: false
+              })
+        }
+
+        %{lv_state | socket: socket}
+      end)
+
+      view |> render_hook("retry_model_fetch", %{})
+      # Force a sync render so any queued :fetch_models_from_integration
+      # → {:fetch_models, _} → Req.get chain finishes before assertion.
+      _ = render(view)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      # After Retry, the credential lookup succeeded and `{:fetch_models, _}`
+      # was sent. The stub returned 500, so the error pane re-rendered
+      # with the upstream-error message — different from the original
+      # ":timeout" we seeded, proving the re-fetch actually ran.
+      assert is_binary(assigns.models_error)
+      refute assigns.models_error =~ ":timeout"
+    end
+
+    test "retry_model_fetch is a no-op when integration is no longer connected",
+         %{conn: conn} do
+      # Defensive: if the operator's integration is gone (deleted /
+      # disconnected) by the time they click Retry, the handler
+      # short-circuits — same gate as the initial fetch.
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")
+
+      :sys.replace_state(view.pid, fn lv_state ->
+        socket = lv_state.socket
+
+        socket = %{
+          socket
+          | assigns:
+              Map.merge(socket.assigns, %{
+                models_error: "Connection error: :timeout",
+                integration_connected: false
+              })
+        }
+
+        %{lv_state | socket: socket}
+      end)
+
+      view |> render_hook("retry_model_fetch", %{})
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.models_loading == false
+      # Error message survives — operator picks a new integration
+      # to recover (the picker selection event clears errors via
+      # start_model_fetch_indicators).
+      assert assigns.models_error != nil
+    end
+
     test "select_provider + select_model after a successful model fetch",
          %{conn: conn} do
       # Drive `select_provider` `{_, models} -> models` (line 314)

@@ -792,34 +792,21 @@ defmodule PhoenixKitAI do
   end
 
   defp resolve_provider_to_uuid(provider) when is_binary(provider) do
-    cond do
-      uuid_shape?(provider) ->
-        # Provider string IS already a uuid — verify the row exists.
-        case PhoenixKit.Integrations.get_integration(provider) do
-          {:ok, _} -> provider
-          _ -> nil
-        end
-
-      true ->
-        # `provider:name` shape — split and look up by scanning the
-        # provider's connections. Uses `list_connections/1` rather
-        # than `find_uuid_by_provider_name/1` so we work against
-        # phoenix_kit versions that predate that helper.
-        case String.split(provider, ":", parts: 2) do
-          [base, name] when name != "" ->
-            lookup_integration_uuid(base, name)
-
-          _ ->
-            nil
-        end
+    # Delegates to core's dual-input primitive. Previously this helper
+    # carried its own regex + dispatch + provider:name split — a
+    # near-clone of `OpenRouterClient.lookup_uuid_for_provider/1`.
+    # Centralising into `Integrations.resolve_to_uuid/1` removes the
+    # duplication and eliminates the "fourth provider tempts a third
+    # copy-paste" risk.
+    case PhoenixKit.Integrations.resolve_to_uuid(provider) do
+      {:ok, uuid} -> uuid
+      _ -> nil
     end
+  rescue
+    _ -> nil
   end
 
   defp resolve_provider_to_uuid(_), do: nil
-
-  defp uuid_shape?(string) when is_binary(string) do
-    Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, string)
-  end
 
   defp log_migration_activity(action_atom, metadata) do
     if Code.ensure_loaded?(PhoenixKit.Activity) do
