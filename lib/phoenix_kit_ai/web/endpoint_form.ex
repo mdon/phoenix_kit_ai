@@ -548,7 +548,14 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       is_binary(new_provider) and is_binary(current_provider) and new_provider != current_provider
 
     if provider_changed? do
-      params = Map.put(params, "base_url", nil)
+      # Clear the model id too — model strings are provider-shaped
+      # ("anthropic/claude-3-opus" on OpenRouter, "mistral-large-latest"
+      # on Mistral) and a stale id from the previous provider would
+      # silently survive into save if the operator never re-picked.
+      params =
+        params
+        |> Map.put("base_url", nil)
+        |> Map.put("model", nil)
 
       socket =
         socket
