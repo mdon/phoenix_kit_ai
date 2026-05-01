@@ -775,35 +775,44 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @impl true
   def handle_info(:fetch_models_from_integration, socket) do
-    # Model auto-listing is OpenRouter-specific (the response shape
-    # `OpenRouterClient.fetch_models_grouped/2` parses isn't portable
-    # across providers). For Mistral / DeepSeek, the form's manual
-    # model-name input is the path — just clear the loading state.
-    if socket.assigns[:current_provider] != "openrouter" do
-      {:noreply, assign(socket, models_loading: false, models_error: nil)}
-    else
-      # Only fetch for the picker's actual selection. Falling back to
-      # "any openrouter:default connection" silently misled operators
-      # whose integration was named anything other than "default" (and
-      # contradicted the picker's "reflect state, never auto-pick"
-      # policy).
-      active_key = socket.assigns[:active_connection]
+    # All three current providers (OpenRouter, Mistral, DeepSeek)
+    # expose `<base_url>/models` with an OpenAI-compatible
+    # `{"data": [{"id": ...}, ...]}` shape. The fetcher uses the
+    # endpoint's `base_url` to hit the right host, and groups by
+    # the endpoint's `provider` for IDs without a slash (so Mistral's
+    # "mistral-large-latest" and DeepSeek's "deepseek-chat" land in
+    # one group rather than each spawning a one-off group).
+    #
+    # Only fetch for the picker's actual selection. Falling back to
+    # "any openrouter:default connection" silently misled operators
+    # whose integration was named anything other than "default" (and
+    # contradicted the picker's "reflect state, never auto-pick"
+    # policy).
+    active_key = socket.assigns[:active_connection]
 
-      case active_key && Integrations.get_credentials(active_key) do
-        {:ok, %{"api_key" => api_key}} when is_binary(api_key) and api_key != "" ->
-          send(self(), {:fetch_models, api_key})
-          {:noreply, socket}
+    case active_key && Integrations.get_credentials(active_key) do
+      {:ok, %{"api_key" => api_key}} when is_binary(api_key) and api_key != "" ->
+        send(self(), {:fetch_models, api_key})
+        {:noreply, socket}
 
-        _ ->
-          {:noreply,
-           assign(socket, models_loading: false, models_error: "No OpenRouter API key configured")}
-      end
+      _ ->
+        {:noreply,
+         assign(socket, models_loading: false, models_error: "No API key configured")}
     end
   end
 
   @impl true
   def handle_info({:fetch_models, api_key}, socket) do
-    case OpenRouterClient.fetch_models_grouped(api_key, type: :all) do
+    base_url = current_models_base_url(socket)
+    fallback_provider = socket.assigns[:current_provider]
+
+    fetch_opts = [
+      model_type: :all,
+      base_url: base_url,
+      fallback_provider: fallback_provider
+    ]
+
+    case OpenRouterClient.fetch_models_grouped(api_key, fetch_opts) do
       {:ok, grouped} ->
         # Flatten for easy lookup
         models =
@@ -856,6 +865,29 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   defp find_model(models, model_id) do
     Enum.find(models, fn m -> m.id == model_id end)
+  end
+
+  # Resolves the base URL the model fetcher should hit. Prefers the
+  # endpoint's saved `base_url` (in case the operator overrode it),
+  # falls back to the schema default for the currently-selected
+  # provider, then to OpenRouter's URL as a last resort. This is
+  # what keeps Mistral / DeepSeek model fetches honest — the saved
+  # endpoint may not exist yet on the new-endpoint flow, so we have
+  # to derive from the form-side `current_provider` assign instead.
+  defp current_models_base_url(socket) do
+    endpoint_url = socket.assigns[:endpoint] && socket.assigns.endpoint.base_url
+
+    cond do
+      is_binary(endpoint_url) and endpoint_url != "" ->
+        endpoint_url
+
+      is_binary(socket.assigns[:current_provider]) ->
+        Endpoint.default_base_url(socket.assigns.current_provider) ||
+          OpenRouterClient.base_url()
+
+      true ->
+        OpenRouterClient.base_url()
+    end
   end
 
   @doc """

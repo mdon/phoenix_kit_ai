@@ -106,7 +106,7 @@ defmodule PhoenixKitAI.OpenRouterClient do
   - `architecture` - Model architecture details
   """
   def fetch_models(api_key, opts \\ []) do
-    url = "#{@base_url}/models"
+    url = "#{Keyword.get(opts, :base_url, @base_url)}/models"
     headers = build_headers(api_key, opts)
     model_type = Keyword.get(opts, :model_type, :all)
 
@@ -147,11 +147,12 @@ defmodule PhoenixKitAI.OpenRouterClient do
   def fetch_models_grouped(api_key, opts \\ []) do
     # Default to :text for backward compatibility
     opts = Keyword.put_new(opts, :model_type, :text)
+    fallback_provider = Keyword.get(opts, :fallback_provider)
 
     with {:ok, models} <- fetch_models(api_key, opts) do
       grouped =
         models
-        |> Enum.group_by(&provider_from_model/1)
+        |> Enum.group_by(&provider_from_model(&1, fallback_provider))
         |> Enum.sort_by(fn {provider, _} -> provider end)
 
       {:ok, grouped}
@@ -684,7 +685,17 @@ defmodule PhoenixKitAI.OpenRouterClient do
   defp model_matches_type?(_model, :all), do: true
 
   defp model_matches_type?(model, :text) do
-    get_modality(model) == "text->text"
+    case get_modality(model) do
+      # OpenRouter: explicit "text->text" modality
+      "text->text" -> true
+      # No modality field at all (Mistral, DeepSeek — OpenAI-compatible
+      # /models endpoints don't return architecture metadata). Treat as
+      # text by default since callers asking for `:text` against an
+      # endpoint that doesn't expose modality just want "show all the
+      # chat models the API listed".
+      "" -> true
+      _ -> false
+    end
   end
 
   defp model_matches_type?(model, :vision) do
@@ -702,10 +713,16 @@ defmodule PhoenixKitAI.OpenRouterClient do
     architecture["modality"] || ""
   end
 
-  defp provider_from_model(model) do
-    case String.split(model.id, "/") do
-      [provider | _] -> provider
-      _ -> "other"
+  defp provider_from_model(model, fallback_provider \\ nil) do
+    case String.split(model.id, "/", parts: 2) do
+      # OpenRouter shape: "anthropic/claude-3-opus" → "anthropic"
+      [provider, _name] -> provider
+      # Mistral / DeepSeek shape: "mistral-large-latest" with no slash.
+      # Group everything under the endpoint's provider key so the form's
+      # provider picker has one entry containing all the models. Falls
+      # back to "other" only when no fallback was passed.
+      [_no_slash] -> fallback_provider || "other"
+      _ -> fallback_provider || "other"
     end
   end
 
