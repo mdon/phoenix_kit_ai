@@ -61,6 +61,7 @@ defmodule PhoenixKitAI.Web.Endpoints do
       |> assign(:project_title, project_title)
       |> assign(:endpoints, [])
       |> assign(:endpoint_stats, %{})
+      |> assign(:connection_status, %{})
       |> assign(:has_endpoints, false)
       |> assign(:sort_by, :id)
       |> assign(:sort_dir, :asc)
@@ -493,9 +494,20 @@ defmodule PhoenixKitAI.Web.Endpoints do
 
     endpoint_stats = AI.get_endpoint_usage_stats()
 
+    # Map of integration_uuid → status for the current OpenRouter
+    # connections. Loaded once so per-endpoint badge rendering can
+    # tell connected / not-connected / orphaned-integration apart
+    # without an N+1 of `Integrations.connected?/1` calls. An
+    # endpoint whose `integration_uuid` is not a key in this map is
+    # an orphan (the integration row was deleted).
+    connection_status =
+      PhoenixKit.Integrations.list_connections("openrouter")
+      |> Map.new(fn conn -> {conn.uuid, conn.data["status"]} end)
+
     socket
     |> assign(:endpoints, endpoints)
     |> assign(:endpoint_stats, endpoint_stats)
+    |> assign(:connection_status, connection_status)
     |> assign(:total_endpoints, total)
     |> assign(:has_endpoints, total > 0)
   end

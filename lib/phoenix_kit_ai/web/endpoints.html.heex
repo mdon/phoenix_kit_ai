@@ -130,6 +130,59 @@
                         {endpoint.name}
                       </.link>
                       <.enabled_badge enabled={endpoint.enabled} />
+                      <%!-- Integration health badge — orthogonal to
+                           `enabled`. An endpoint can be enabled but
+                           unable to actually serve requests because
+                           its pinned integration was deleted, never
+                           validated, or hit an auth error. Surfacing
+                           that state stops the list from claiming
+                           "Active" for endpoints that would 401 on
+                           the next request.
+
+                           Three failure shapes:
+                           - integration_uuid set but doesn't resolve
+                             → the integration was deleted ("Missing")
+                           - integration_uuid resolves with status
+                             "error" → credentials broken ("Error")
+                           - integration_uuid resolves but status is
+                             not "connected" → never tested or
+                             disconnected ("Not connected")
+                           - status "connected" → no badge (the
+                             enabled badge already conveys "ready") --%>
+                      <%= cond do %>
+                        <% endpoint.integration_uuid &&
+                             not Map.has_key?(@connection_status, endpoint.integration_uuid) -> %>
+                          <span
+                            class="badge badge-error badge-sm"
+                            title="The pinned integration was deleted. Edit the endpoint and select a new one."
+                          >
+                            Integration missing
+                          </span>
+                        <% endpoint.integration_uuid &&
+                             Map.get(@connection_status, endpoint.integration_uuid) == "error" -> %>
+                          <span
+                            class="badge badge-error badge-sm"
+                            title="The integration's last validation failed. Open it in Settings → Integrations to retest."
+                          >
+                            Integration error
+                          </span>
+                        <% endpoint.integration_uuid &&
+                             Map.get(@connection_status, endpoint.integration_uuid) != "connected" -> %>
+                          <span
+                            class="badge badge-warning badge-sm"
+                            title="The integration is not currently connected. Open it in Settings → Integrations to test."
+                          >
+                            Not connected
+                          </span>
+                        <% is_nil(endpoint.integration_uuid) -> %>
+                          <span
+                            class="badge badge-warning badge-sm"
+                            title="No integration selected. Edit the endpoint to pick one."
+                          >
+                            No integration
+                          </span>
+                        <% true -> %>
+                      <% end %>
                       <span class="badge badge-outline">{endpoint.provider}</span>
                     </div>
 

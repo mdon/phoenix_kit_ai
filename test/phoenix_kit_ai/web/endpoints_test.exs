@@ -17,6 +17,65 @@ defmodule PhoenixKitAI.Web.EndpointsTest do
       # than a tautology like `is_binary(html)`.
       assert html =~ ~r/setup|No endpoints/i
     end
+
+    test "endpoint with deleted integration_uuid renders 'Integration missing' badge",
+         %{conn: conn} do
+      # Regression: the list previously showed only the `enabled`
+      # badge ("Active") regardless of integration health, so an
+      # endpoint pinned to a deleted integration looked fine at a
+      # glance. The connection_status map (loaded once per render
+      # to avoid an N+1 of `Integrations.connected?/1`) now drives
+      # a per-endpoint health badge alongside the enabled badge.
+      orphaned_uuid = "01234567-89ab-7def-8000-000000010001"
+
+      _endpoint =
+        fixture_endpoint(
+          name: "Orphan Endpoint",
+          integration_uuid: orphaned_uuid,
+          enabled: true
+        )
+
+      {:ok, _view, html} = live(conn, "/en/admin/ai/endpoints")
+
+      assert html =~ "Orphan Endpoint"
+      assert html =~ "Integration missing"
+      # `enabled` badge stays — `enabled` is config, integration
+      # health is orthogonal. Both render so the operator sees
+      # "Active config, but connectivity is broken."
+      assert html =~ "Active"
+    end
+
+    test "endpoint with no integration_uuid renders 'No integration' badge",
+         %{conn: conn} do
+      _endpoint = fixture_endpoint(name: "Unwired Endpoint", integration_uuid: nil)
+
+      {:ok, _view, html} = live(conn, "/en/admin/ai/endpoints")
+
+      assert html =~ "No integration"
+    end
+
+    test "endpoint with a connected integration_uuid renders no health badge",
+         %{conn: conn} do
+      # Healthy: integration exists AND status is "connected". No
+      # extra health badge — the enabled badge ("Active") alone is
+      # sufficient signal.
+      %{uuid: integration_uuid} =
+        seed_openrouter_connection(
+          "live-#{System.unique_integer([:positive])}",
+          data: %{"api_key" => "sk-live", "status" => "connected"}
+        )
+
+      _endpoint =
+        fixture_endpoint(name: "Healthy Endpoint", integration_uuid: integration_uuid)
+
+      {:ok, _view, html} = live(conn, "/en/admin/ai/endpoints")
+
+      assert html =~ "Healthy Endpoint"
+      refute html =~ "Integration missing"
+      refute html =~ "Integration error"
+      refute html =~ "Not connected"
+      refute html =~ "No integration"
+    end
   end
 
   describe "toggle_endpoint" do
