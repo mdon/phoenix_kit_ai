@@ -222,7 +222,37 @@ defmodule PhoenixKitAI.Endpoint do
     |> validate_reasoning()
     |> maybe_set_default_base_url()
     |> validate_base_url()
+    |> maybe_clear_legacy_api_key()
     |> unique_constraint(:name)
+  end
+
+  # When an endpoint is being linked to an Integrations row (via
+  # `integration_uuid`), clear the legacy `api_key` column in the same
+  # changeset so the write is atomic. Once a user explicitly chooses the
+  # integration as the source of truth, the legacy column should not
+  # silently survive as a stale fallback — it would mask config drift
+  # and rot quietly. The column itself stays in the schema; only the
+  # value is wiped so a manual recovery via direct DB edit is still
+  # possible if something goes catastrophically wrong.
+  #
+  # Cleared to `""` rather than `nil` because the column is `NOT NULL`
+  # (V34 schema). Both the recovery-card render condition
+  # (`api_key && api_key != ""`) and the OpenRouterClient fallback chain
+  # (`maybe_get_credentials("") => {:error, :not_configured}`) treat the
+  # empty string as "no fallback configured" — same semantics as NULL,
+  # without needing a schema relaxation.
+  #
+  # Only fires when the changeset is actually CHANGING `integration_uuid`
+  # to a non-empty value. A no-op edit (saving the form without touching
+  # the integration field) leaves `api_key` alone.
+  defp maybe_clear_legacy_api_key(changeset) do
+    case fetch_change(changeset, :integration_uuid) do
+      {:ok, uuid} when is_binary(uuid) and uuid != "" ->
+        put_change(changeset, :api_key, "")
+
+      _ ->
+        changeset
+    end
   end
 
   @doc """

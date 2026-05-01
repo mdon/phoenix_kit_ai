@@ -175,9 +175,14 @@ PhoenixKitAI.list_endpoints(
 > existing `provider` strings). The picker on the endpoint form writes
 > the chosen connection's uuid; `OpenRouterClient.resolve_api_key/1`
 > looks up credentials by uuid at request time — no per-provider
-> guessing. The legacy `api_key` column is retained as a fallback
-> safety net (and is currently `NOT NULL` in core's V34 — a value must
-> still be provided until a future major version drops the column).
+> guessing. After a successful migration (manual save with an
+> integration picked, or `migrate_legacy/0` at boot), the legacy
+> `api_key` column is atomically wiped to `""` so the credential lives
+> in exactly one place. The column itself stays in the schema (it's
+> `NOT NULL` in core's V34, so the value must be a string — empty
+> string represents "cleared") so a manual DB recovery is still
+> possible if catastrophe strikes; planned for removal in a future
+> major version.
 > See [Migrating from legacy `endpoint.api_key`](#migrating-from-legacy-endpointapi_key)
 > for the recommended workflow and the boot-time auto-migrator.
 
@@ -231,12 +236,21 @@ OpenRouter API key directly in the `api_key` column and used the bare
 reference. V107's backfill stamps `integration_uuid` for any endpoint
 whose `provider` matches a `PhoenixKit.Integrations` row. Endpoints
 that can't be auto-resolved keep working via the legacy `api_key`
-column with a deprecation warning per request.
+column with a deprecation warning per request — until they're
+migrated, at which point the column is atomically wiped.
 
 The recommended workflow is to point each endpoint at a specific
-integration connection via the form's `integration_picker`;
-`OpenRouterClient.resolve_api_key/1` then prefers the uuid-resolved
-credentials and the legacy fallback stops firing.
+integration connection via the form's `integration_picker`. The
+endpoint changeset clears the legacy column to `""` in the same
+DB transaction (`Endpoint.maybe_clear_legacy_api_key/1`), so once
+migrated the credential lives only in the integration row.
+
+Stuck endpoints (`api_key` populated, `integration_uuid` still NULL —
+e.g., when V107 couldn't match anything and the boot-time migrator
+hasn't reached this endpoint) get a "Legacy API key (recovery)" card
+on the edit form, with a copy button so the operator can paste the
+key into a new Integration without bouncing back to OpenRouter. The
+card disappears once an integration is selected and saved.
 
 ### Manual workflow (per-endpoint)
 

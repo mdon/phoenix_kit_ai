@@ -157,9 +157,8 @@ defmodule PhoenixKitAI.OpenRouterClient.LegacyFallbackTest do
 
     setup do
       # Seed an OpenRouter integration row, capture its uuid.
-      :ok = PhoenixKit.Integrations.add_connection("openrouter", "primary") |> elem(0)
-      {:ok, _} = PhoenixKit.Integrations.save_setup("openrouter:primary", %{"api_key" => "sk-uuid-resolved"})
-      [%{uuid: uuid}] = PhoenixKit.Integrations.list_connections("openrouter")
+      {:ok, %{uuid: uuid}} = PhoenixKit.Integrations.add_connection("openrouter", "primary")
+      {:ok, _} = PhoenixKit.Integrations.save_setup(uuid, %{"api_key" => "sk-uuid-resolved"})
       {:ok, integration_uuid: uuid}
     end
 
@@ -237,11 +236,10 @@ defmodule PhoenixKitAI.OpenRouterClient.LegacyFallbackTest do
 
     test "promotes integration_uuid when provider is a `provider:name` shape that resolves" do
       # Pre-create an integration row.
-      :ok = PhoenixKit.Integrations.add_connection("openrouter", "lazy") |> elem(0)
-      {:ok, _} = PhoenixKit.Integrations.save_setup("openrouter:lazy", %{"api_key" => "sk-lazy"})
-      [%{uuid: integration_uuid}] =
-        PhoenixKit.Integrations.list_connections("openrouter")
-        |> Enum.filter(&(&1.name == "lazy"))
+      {:ok, %{uuid: integration_uuid}} =
+        PhoenixKit.Integrations.add_connection("openrouter", "lazy")
+
+      {:ok, _} = PhoenixKit.Integrations.save_setup(integration_uuid, %{"api_key" => "sk-lazy"})
 
       # Create a real endpoint pinned to that integration via the
       # legacy `provider` string. integration_uuid stays NULL.
@@ -267,11 +265,11 @@ defmodule PhoenixKitAI.OpenRouterClient.LegacyFallbackTest do
     end
 
     test "promotes integration_uuid when provider is a uuid string that resolves" do
-      :ok = PhoenixKit.Integrations.add_connection("openrouter", "uuid-direct") |> elem(0)
-      {:ok, _} = PhoenixKit.Integrations.save_setup("openrouter:uuid-direct", %{"api_key" => "sk-direct"})
-      [%{uuid: integration_uuid}] =
-        PhoenixKit.Integrations.list_connections("openrouter")
-        |> Enum.filter(&(&1.name == "uuid-direct"))
+      {:ok, %{uuid: integration_uuid}} =
+        PhoenixKit.Integrations.add_connection("openrouter", "uuid-direct")
+
+      {:ok, _} =
+        PhoenixKit.Integrations.save_setup(integration_uuid, %{"api_key" => "sk-direct"})
 
       # Endpoint stuffed the uuid in the provider string column
       # (pre-V107 form-save shape) instead of using integration_uuid.
@@ -290,13 +288,11 @@ defmodule PhoenixKitAI.OpenRouterClient.LegacyFallbackTest do
     end
 
     test "does NOT promote when integration_uuid is already set" do
-      :ok = PhoenixKit.Integrations.add_connection("openrouter", "no-promote") |> elem(0)
-      {:ok, _} =
-        PhoenixKit.Integrations.save_setup("openrouter:no-promote", %{"api_key" => "sk-noop"})
+      {:ok, %{uuid: integration_uuid}} =
+        PhoenixKit.Integrations.add_connection("openrouter", "no-promote")
 
-      [%{uuid: integration_uuid}] =
-        PhoenixKit.Integrations.list_connections("openrouter")
-        |> Enum.filter(&(&1.name == "no-promote"))
+      {:ok, _} =
+        PhoenixKit.Integrations.save_setup(integration_uuid, %{"api_key" => "sk-noop"})
 
       {:ok, endpoint} =
         PhoenixKitAI.create_endpoint(%{

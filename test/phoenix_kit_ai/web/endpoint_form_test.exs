@@ -40,6 +40,102 @@ defmodule PhoenixKitAI.Web.EndpointFormTest do
     end
   end
 
+  describe "edit — legacy api_key recovery field" do
+    # When the migration hasn't completed for this endpoint
+    # (api_key column populated, integration_uuid still NULL), the
+    # form surfaces the legacy key in a read-only password field with
+    # a copy button so the operator can paste it into a new
+    # Integration. Once an integration is selected and saved, the
+    # changeset clears api_key in the same write so the field
+    # disappears and stays gone.
+
+    test "renders the recovery card when api_key is set and integration_uuid is nil",
+         %{conn: conn} do
+      endpoint = fixture_endpoint(api_key: "sk-or-recovery-test", integration_uuid: nil)
+
+      {:ok, _view, html} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
+
+      assert html =~ "Legacy API key (recovery)"
+      # Field is rendered with the legacy value (masked via type=password
+      # client-side, but the value attr is in the markup so the copy
+      # button can grab it).
+      assert html =~ ~s(value="sk-or-recovery-test")
+      assert html =~ "data-copy-target=\"#legacy-api-key-field\""
+    end
+
+    test "does NOT render the recovery card when integration_uuid is set",
+         %{conn: conn} do
+      %{uuid: integration_uuid} = seed_openrouter_connection("recovery-hidden")
+
+      endpoint =
+        fixture_endpoint(
+          api_key: "sk-still-here-but-hidden",
+          integration_uuid: integration_uuid
+        )
+
+      {:ok, _view, html} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
+
+      refute html =~ "Legacy API key (recovery)"
+    end
+
+    test "does NOT render the recovery card when api_key is the empty string",
+         %{conn: conn} do
+      # The post-clear state. `api_key` is NOT NULL in the schema, so
+      # the changeset clears to "" rather than NULL — empty string is
+      # treated as "no fallback" by every downstream consumer.
+      endpoint = fixture_endpoint(api_key: "sk-temp")
+
+      PhoenixKitAI.Test.Repo.query!(
+        "UPDATE phoenix_kit_ai_endpoints SET api_key = '' WHERE uuid = $1",
+        [Ecto.UUID.dump!(endpoint.uuid)]
+      )
+
+      {:ok, _view, html} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
+
+      refute html =~ "Legacy API key (recovery)"
+    end
+
+    test "is hidden after picking an integration and saving (clear-on-save round trip)",
+         %{conn: conn} do
+      # Pre-stage: an integration row to pick, plus a legacy endpoint.
+      %{uuid: integration_uuid} = seed_openrouter_connection("clear-on-save")
+
+      endpoint =
+        fixture_endpoint(api_key: "sk-or-will-be-cleared", integration_uuid: nil)
+
+      {:ok, view, html} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
+      assert html =~ "Legacy API key (recovery)"
+
+      # Simulate the integration_picker setting active_connection. The
+      # form LV exposes "select_openrouter_connection" for this.
+      view
+      |> render_hook("select_openrouter_connection", %{"uuid" => integration_uuid})
+
+      # Submit the form. The active_connection feeds integration_uuid
+      # into the params via the form's save handler.
+      view
+      |> form("form[phx-submit=\"save\"]",
+        endpoint: %{
+          name: endpoint.name,
+          provider: "openrouter",
+          model: endpoint.model
+        }
+      )
+      |> render_submit()
+
+      # Reload from DB: api_key cleared, integration_uuid set, both
+      # in the same transaction. Cleared to "" (not NULL) since the
+      # column is NOT NULL — same end-state semantics for downstream.
+      reloaded = PhoenixKitAI.get_endpoint!(endpoint.uuid)
+      assert reloaded.integration_uuid == integration_uuid
+      assert reloaded.api_key == ""
+
+      # Recovery card no longer renders on a fresh mount.
+      {:ok, _view2, html2} = live(conn, "/en/admin/ai/endpoints/#{endpoint.uuid}/edit")
+      refute html2 =~ "Legacy API key (recovery)"
+    end
+  end
+
   describe "integration_warning/1" do
     # `save_success_message/2` calls `integration_warning/1` after a
     # successful save and appends the result to the flash. The flash

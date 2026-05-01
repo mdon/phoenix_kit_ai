@@ -12,7 +12,7 @@ The omissions below are deliberate so consumers and future contributors don't ex
 
 - **No DB migrations of its own** — every table this module owns (`phoenix_kit_ai_endpoints`, `phoenix_kit_ai_prompts`, `phoenix_kit_ai_requests`) is created by versioned migrations in core `phoenix_kit` (V40+ for `uuid_generate_v7()`, V57+ for the AI tables). Adding a column is a core migration first, then schema + changeset edits here.
 - **No per-completion activity logging** — `PhoenixKit.Activity.log/1` is invoked only on endpoint/prompt CRUD + enable/disable toggles. Per-request usage already lives in `phoenix_kit_ai_requests` with token/cost/latency columns; mirroring it into `phoenix_kit_activities` would double-write the same audit trail.
-- **No forced data migration for legacy `endpoint.api_key`** — `OpenRouterClient.resolve_api_key/1` keeps pre-Integrations endpoints working via fallback to the legacy column with a per-call `Logger.warning`. Operators can migrate at their own pace through the UI, OR opt in to the orchestrated migrators by calling `PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0` from `Application.start/2`. The orchestrator invokes `migrate_legacy/0` on every registered module — for AI that runs both the api_key→Integration credentials migration AND the provider-string→integration_uuid reference sweep, with activity-log emissions per migrated record. See "Migrating from legacy `endpoint.api_key`" below.
+- **No forced data migration for legacy `endpoint.api_key`** — `OpenRouterClient.resolve_api_key/1` keeps pre-Integrations endpoints working via a 3-tier fallback chain (`integration_uuid` → legacy `provider` string → raw `api_key` column) with a per-call `Logger.warning` only when it actually falls all the way through to the column. Operators can migrate at their own pace through the UI (an explicit save with an integration picked atomically clears the legacy column), OR opt in to the orchestrated migrators by calling `PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0` from `Application.start/2`. The orchestrator invokes `migrate_legacy/0` on every registered module — for AI that runs both the api_key→Integration credentials migration (atomic clear of the legacy column on success) AND the provider-string→integration_uuid reference sweep, with activity-log emissions per migrated record. See "Migrating from legacy `endpoint.api_key`" below.
 - **No public HTTP / API surface** — AI is admin-only. No JSON endpoints, no webhook receivers, no socket forwards. Consumers wire AI completions into their own host code via the `PhoenixKitAI` context module.
 - **No background jobs (Oban)** — completions run synchronously from the calling LiveView (`Playground.handle_info(:do_send, …)`) so the user sees the response inline. Long-running batch generation belongs in the consumer app, not here.
 - **No streaming responses** — `Completion` returns the full `{:ok, response}` shape; OpenRouter's SSE streaming endpoint isn't surfaced. The Playground UI is request/response, not chat-stream.
@@ -239,7 +239,7 @@ per-provider fallback.
 
 Renaming or re-validating the integration on the admin side doesn't
 break the endpoint's reference: uuids are stable across renames
-(`PhoenixKit.Integrations.rename_connection/4` updates the storage
+(`PhoenixKit.Integrations.rename_connection/3` updates the storage
 row's `key` column in place).
 
 ## Migrating from legacy `endpoint.api_key`
@@ -254,19 +254,36 @@ matches a `PhoenixKit.Integrations` row (exact match for
 NULL — `resolve_api_key/1` falls back to the legacy `api_key` column
 and logs a `Logger.warning` identifying the endpoint by name + UUID.
 
-To clear the legacy warning for an endpoint:
+### Recovery card for stuck migrations
 
-1. Open Settings → Integrations and add an OpenRouter connection (if
-   one doesn't already exist).
+When the legacy `api_key` is populated but `integration_uuid` is
+still NULL (V107 couldn't match, or `migrate_legacy/0` didn't reach
+this endpoint), the endpoint edit form renders a "Legacy API key
+(recovery)" card under the integration picker. Read-only,
+password-masked, with a copy button. Lets the operator recover the
+key and paste it into a new Integration without bouncing back to
+OpenRouter. The card disappears once an integration is selected and
+saved.
+
+### Manual cleanup flow
+
+To clear the legacy warning for a stuck endpoint:
+
+1. Open Settings → Integrations and add an OpenRouter connection (or
+   reuse the legacy key copied from the recovery card).
 2. Edit the endpoint in the AI admin UI and select the connection
    from the `integration_picker`. The form writes the connection's
    uuid into `integration_uuid`.
-3. Save. The legacy warning stops firing on the next request.
+3. Save. `Endpoint.changeset/2`'s `maybe_clear_legacy_api_key/1`
+   wipes the legacy `api_key` column to `""` in the same DB write
+   (atomic with the integration_uuid set). The warning stops, the
+   recovery card disappears, and stays gone.
 
-The `api_key` column is retained so pre-migration deployments keep
-working without forced downtime, and is flagged **Deprecated** in
-`PhoenixKitAI.Endpoint` — planned for removal in a future major
-version.
+The `api_key` column is retained in the schema so a manual DB
+recovery is still possible if something goes catastrophically wrong;
+the *value* is cleared post-migration. The column is flagged
+**Deprecated** in `PhoenixKitAI.Endpoint` — planned for removal in a
+future major version.
 
 ### Auto-migrating at host-app boot
 
@@ -300,17 +317,18 @@ What the credentials pass does:
 
 - Finds endpoints with `provider == "openrouter"` (the bare default — never named connections like `"openrouter:my-key"`) AND a non-empty `api_key`.
 - Groups them by api_key value (so endpoints sharing a key share one connection — dedup).
-- Creates a `PhoenixKit.Integrations` connection per distinct key. Naming: `"openrouter:default"` for single-key deployments; `"openrouter:imported-1"`, `"openrouter:imported-2"` for multi-key deployments.
-- Updates each endpoint's `provider` AND `integration_uuid` fields to point at the new connection.
-- **Never clears the legacy `api_key` column** — it stays as a safety-net fallback. `OpenRouterClient.resolve_api_key/1` prefers Integrations, so post-migration endpoints stop firing the legacy warning.
+- For each group: creates a `PhoenixKit.Integrations` connection via `add_connection/3`, writes the key into the integration row via `save_setup(uuid, attrs)`, then atomically updates each endpoint's `provider`, `integration_uuid`, AND clears `api_key` to `""` in a single `Repo.update_all`. Naming: `"openrouter:default"` for single-key deployments; `"openrouter:imported-1"`, `"openrouter:imported-2"` for multi-key deployments.
+- **Clears the legacy `api_key` column atomically with linking** — once the credential is in the integration row and the endpoint references it by uuid, the duplicate column would only rot. The runtime resolver (`OpenRouterClient.build_headers_from_endpoint/1`) takes the `integration_uuid` path; with `api_key = ""` the legacy fallback tier returns `:not_configured`, so a broken integration surfaces a loud error instead of silently coasting on a stale key.
+- *Un*-migrated endpoints (skipped by the where-clause filter, or skipped because of an idempotency gate) keep their `api_key` populated as a safety net until they're explicitly handled.
 
 Idempotency guards (any one short-circuits):
 
 - The `ai_legacy_api_key_migration_completed_at` setting is set → skip.
 - ANY `integration:openrouter:*` key already exists in `phoenix_kit_settings` (operator already set up Integrations manually) → mark complete and skip.
 - No endpoints need migrating → mark complete and skip.
+- Plus the where-clause filter (`api_key != ""`) makes re-runs safe — already-migrated endpoints have an empty `api_key` and are invisible to subsequent passes.
 
-Failure modes are contained: a top-level `try/rescue/catch :exit` shell ensures the migration never crashes host-app boot. Per-key-group operations are isolated — one bad group doesn't abort others. Partial migration is safe because un-migrated endpoints still resolve via the legacy fallback path.
+Failure modes are contained: a top-level `try/rescue/catch :exit` shell ensures the migration never crashes host-app boot. Per-key-group operations are isolated — one bad group doesn't abort others. Partial migration is safe because un-migrated endpoints still have their `api_key` populated and resolve via the legacy fallback path; only successfully-migrated endpoints have the fallback removed.
 
 The migration is opt-in (you must call it explicitly). Operators who prefer to migrate manually via the admin UI can simply not call the function — the resolver's legacy fallback path keeps existing endpoints working indefinitely.
 

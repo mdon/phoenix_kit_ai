@@ -154,8 +154,9 @@ defmodule PhoenixKitAI.LegacyApiKeyMigrationTest do
       reloaded = PhoenixKitAI.get_endpoint!(ep.uuid)
       assert reloaded.provider == "openrouter:default"
 
-      # Legacy api_key column STILL POPULATED — safety-net guarantee.
-      assert reloaded.api_key == "sk-only-key"
+      # Legacy api_key column cleared — credential lives in the
+      # integration row now (atomic with the integration_uuid set).
+      assert reloaded.api_key == ""
 
       # Integrations connection actually carries the key.
       assert {:ok, %{"api_key" => "sk-only-key"}} =
@@ -174,6 +175,15 @@ defmodule PhoenixKitAI.LegacyApiKeyMigrationTest do
 
         assert reloaded.provider == "openrouter:default",
                "expected #{ep.name} to point at the shared connection"
+
+        # Atomic clear: every endpoint in the group has its legacy
+        # api_key wiped in the same UPDATE that linked it to the
+        # integration. Group dedup → one integration row holds the
+        # shared key; per-endpoint duplicates would only rot.
+        assert reloaded.api_key == "",
+               "expected #{ep.name} legacy api_key to be cleared"
+
+        assert is_binary(reloaded.integration_uuid)
       end
 
       # Only ONE integration created (dedup by api_key value).
@@ -217,7 +227,21 @@ defmodule PhoenixKitAI.LegacyApiKeyMigrationTest do
                ]
       end
 
-      # Three integration connections created.
+      # Every endpoint had its legacy api_key column cleared and was
+      # linked to a distinct integration.
+      for reloaded <- [reloaded_a, reloaded_b, reloaded_c] do
+        assert reloaded.api_key == ""
+        assert is_binary(reloaded.integration_uuid)
+      end
+
+      # Three distinct integration uuids — no accidental sharing
+      # across the imported groups.
+      uuids =
+        MapSet.new([reloaded_a.integration_uuid, reloaded_b.integration_uuid, reloaded_c.integration_uuid])
+
+      assert MapSet.size(uuids) == 3
+
+      # Three integration connections created in storage.
       keys =
         SQL.query!(
           TestRepo,
@@ -263,15 +287,27 @@ defmodule PhoenixKitAI.LegacyApiKeyMigrationTest do
   end
 
   describe "safety-net guarantees" do
-    test "the legacy api_key column is NEVER cleared after migration" do
-      ep = legacy_endpoint_fixture("sk-keep-as-fallback")
+    test "the legacy api_key column IS cleared after a successful migration" do
+      # Once `migrate_endpoint_group` has created an integration row
+      # carrying the endpoint's api_key AND linked the endpoint via
+      # `integration_uuid`, the legacy column is redundant — the
+      # integration row is the canonical credential source. Keeping a
+      # duplicate on the endpoint would silently rot (admin rotates
+      # the integration's key, the legacy column drifts; broken
+      # integration silently masked by stale fallback). Atomic clear
+      # in `update_endpoints_provider/3` removes the redundancy.
+      ep = legacy_endpoint_fixture("sk-will-be-cleared")
 
       assert :ok = PhoenixKitAI.run_legacy_api_key_migration()
 
       reloaded = PhoenixKitAI.get_endpoint!(ep.uuid)
 
-      assert reloaded.api_key == "sk-keep-as-fallback",
-             "expected the legacy column to remain populated as a fallback safety net"
+      assert reloaded.api_key == "",
+             "expected migration to clear the legacy column once integration_uuid is set"
+
+      # The credential is still reachable — via the integration row.
+      assert {:ok, %{"api_key" => "sk-will-be-cleared"}} =
+               PhoenixKit.Integrations.get_credentials(reloaded.integration_uuid)
     end
 
     test "function returns :ok even when called from a process with no Integrations module loaded" do
@@ -296,6 +332,30 @@ defmodule PhoenixKitAI.LegacyApiKeyMigrationTest do
       # The stamped uuid points at the new integration row.
       [%{uuid: integration_uuid}] = Integrations.list_connections("openrouter")
       assert reloaded.integration_uuid == integration_uuid
+    end
+
+    test "post-migration request flow resolves through the integration, not the legacy column" do
+      # End-to-end: legacy endpoint → migrate → build_headers_from_endpoint
+      # must use the integration row's api_key (the legacy column is
+      # now empty). This pins that the migration's atomic clear is
+      # safe — credentials are still reachable, just via the
+      # canonical path.
+      alias PhoenixKitAI.OpenRouterClient
+
+      ep = legacy_endpoint_fixture("sk-end-to-end")
+
+      assert :ok = PhoenixKitAI.run_legacy_api_key_migration()
+
+      reloaded = PhoenixKitAI.get_endpoint!(ep.uuid)
+      assert reloaded.api_key == ""
+      assert is_binary(reloaded.integration_uuid)
+
+      # Resolver picks the integration_uuid path (tier 1) because
+      # integration_uuid is set. If the legacy column were still
+      # populated, this would still pass — the new test pins that
+      # the OUTPUT is correct even with no fallback available.
+      headers = OpenRouterClient.build_headers_from_endpoint(reloaded)
+      assert {"Authorization", "Bearer sk-end-to-end"} in headers
     end
   end
 

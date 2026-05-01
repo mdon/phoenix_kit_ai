@@ -554,30 +554,54 @@ defmodule PhoenixKitAI do
   defp migrate_endpoint_group(name, api_key, endpoints) do
     full_key = "openrouter:#{name}"
 
-    case PhoenixKit.Integrations.save_setup(full_key, %{"api_key" => api_key}) do
-      {:ok, _saved} ->
-        integration_uuid = lookup_integration_uuid("openrouter", name)
-        count = update_endpoints_provider(endpoints, full_key, integration_uuid)
+    # Two-step write under core's strict-UUID Integrations API:
+    # add_connection/3 creates (or surfaces) the row and returns its
+    # uuid; save_setup/3 then stores the legacy api_key against that
+    # uuid. `:already_exists` on re-runs is fine — fall back to
+    # looking up the existing row's uuid.
+    integration_uuid =
+      case PhoenixKit.Integrations.add_connection("openrouter", name) do
+        {:ok, %{uuid: uuid}} -> uuid
+        {:error, :already_exists} -> lookup_integration_uuid("openrouter", name)
+        _ -> nil
+      end
 
-        if count > 0 and is_binary(integration_uuid) do
-          log_migration_activity(:credentials_migrated, %{
-            "endpoint_count" => count,
-            "integration_uuid" => integration_uuid,
-            "connection_name" => name
-          })
-        end
-
-        count
-
-      {:error, _reason} ->
+    cond do
+      is_nil(integration_uuid) ->
         require Logger
 
         Logger.warning(
           "[PhoenixKitAI] Skipping legacy api_key group (#{length(endpoints)} endpoints) — " <>
-            "save_setup failed"
+            "could not resolve integration uuid"
         )
 
         0
+
+      true ->
+        case PhoenixKit.Integrations.save_setup(integration_uuid, %{"api_key" => api_key}) do
+          {:ok, _saved} ->
+            count = update_endpoints_provider(endpoints, full_key, integration_uuid)
+
+            if count > 0 do
+              log_migration_activity(:credentials_migrated, %{
+                "endpoint_count" => count,
+                "integration_uuid" => integration_uuid,
+                "connection_name" => name
+              })
+            end
+
+            count
+
+          {:error, _reason} ->
+            require Logger
+
+            Logger.warning(
+              "[PhoenixKitAI] Skipping legacy api_key group (#{length(endpoints)} endpoints) — " <>
+                "save_setup failed"
+            )
+
+            0
+        end
     end
   rescue
     _ -> 0
@@ -603,8 +627,19 @@ defmodule PhoenixKitAI do
   defp update_endpoints_provider(endpoints, new_provider, integration_uuid) do
     uuids = Enum.map(endpoints, & &1.uuid)
 
+    # Atomic write: set the new provider/integration_uuid AND clear
+    # the legacy api_key column in the same UPDATE statement. The
+    # integration row created above (`save_setup`) holds the same
+    # api_key the endpoint had — it's the canonical credential
+    # source now. Keeping a duplicate on the endpoint row would only
+    # rot quietly (admin rotates the integration's key, endpoint's
+    # column drifts) and mask config drift if the integration ever
+    # breaks. Cleared to "" rather than NULL because the column is
+    # NOT NULL (V34); both the runtime fallback chain
+    # (`maybe_get_credentials("") => {:error, :not_configured}`) and
+    # the recovery-card render condition treat "" as "no fallback".
     set_clause =
-      [provider: new_provider, updated_at: DateTime.utc_now()]
+      [provider: new_provider, api_key: "", updated_at: DateTime.utc_now()]
       |> maybe_add_integration_uuid(integration_uuid)
 
     {count, _} =

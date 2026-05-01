@@ -199,6 +199,149 @@ defmodule PhoenixKitAI.EndpointTest do
     end
   end
 
+  describe "changeset/2 — clear-on-set legacy api_key" do
+    # The endpoint form's recovery card surfaces an existing
+    # `endpoint.api_key` when no Integration is selected. As soon as the
+    # user picks an Integration, the changeset clears the legacy column
+    # in the SAME write so the runtime fallback chain (which would
+    # otherwise mask config drift via the stale key) is removed.
+
+    test "setting integration_uuid clears legacy api_key in the same changeset" do
+      uuid = UUIDv7.generate()
+
+      legacy_endpoint = %Endpoint{
+        name: "Legacy",
+        provider: "openrouter",
+        model: "a/b",
+        api_key: "sk-legacy"
+      }
+
+      changeset = Endpoint.changeset(legacy_endpoint, %{integration_uuid: uuid})
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :integration_uuid) == uuid
+      # The change is explicitly to "" — not just "no change" — so the
+      # actual UPDATE statement wipes the column. Empty string (rather
+      # than NULL) because the column is NOT NULL; both the recovery-
+      # card condition and the runtime fallback chain treat "" as
+      # "no fallback configured".
+      assert {:ok, ""} = Ecto.Changeset.fetch_change(changeset, :api_key)
+    end
+
+    test "setting integration_uuid to empty string does NOT clear api_key" do
+      # Defensive: an empty-string uuid is meaningless and shouldn't
+      # trigger the destructive clear. Only a real uuid moves the
+      # endpoint to "integration is the source of truth".
+      legacy_endpoint = %Endpoint{
+        name: "Legacy",
+        provider: "openrouter",
+        model: "a/b",
+        api_key: "sk-legacy"
+      }
+
+      changeset = Endpoint.changeset(legacy_endpoint, %{integration_uuid: ""})
+
+      assert :error = Ecto.Changeset.fetch_change(changeset, :api_key)
+    end
+
+    test "saving an unrelated field on an already-migrated endpoint leaves api_key alone" do
+      # endpoint.integration_uuid is set, api_key is nil (already
+      # migrated). Editing description must NOT touch api_key — would
+      # show up as a phantom change otherwise.
+      uuid = UUIDv7.generate()
+
+      migrated_endpoint = %Endpoint{
+        name: "Migrated",
+        provider: "openrouter",
+        model: "a/b",
+        integration_uuid: uuid,
+        api_key: nil
+      }
+
+      changeset =
+        Endpoint.changeset(migrated_endpoint, %{description: "new description"})
+
+      assert changeset.valid?
+      assert :error = Ecto.Changeset.fetch_change(changeset, :api_key)
+      assert :error = Ecto.Changeset.fetch_change(changeset, :integration_uuid)
+    end
+
+    test "saving with the same integration_uuid that's already set does NOT clear api_key" do
+      # `fetch_change/2` only fires when the value is actually changing.
+      # If the user submits the form without touching the picker, the
+      # cast no-ops on integration_uuid and the maybe_clear guard skips.
+      uuid = UUIDv7.generate()
+
+      migrated_endpoint = %Endpoint{
+        name: "Migrated",
+        provider: "openrouter",
+        model: "a/b",
+        integration_uuid: uuid,
+        # Defensive: imagine an endpoint that V107 backfilled (set
+        # integration_uuid) but never went through a clear-on-save —
+        # api_key column still populated. A no-op edit shouldn't
+        # opportunistically clear it.
+        api_key: "sk-stale-but-untouched"
+      }
+
+      changeset =
+        Endpoint.changeset(migrated_endpoint, %{integration_uuid: uuid, description: "x"})
+
+      assert :error = Ecto.Changeset.fetch_change(changeset, :api_key)
+    end
+
+    test "transitioning integration_uuid from set→nil does NOT clear api_key" do
+      # Unselecting the integration (uuid → nil) is not the same as
+      # selecting one. If the column is somehow still populated, leave
+      # it alone — only "you explicitly chose an integration" triggers
+      # the destructive clear.
+      uuid = UUIDv7.generate()
+
+      endpoint_with_both = %Endpoint{
+        name: "Both",
+        provider: "openrouter",
+        model: "a/b",
+        integration_uuid: uuid,
+        api_key: "sk-still-here"
+      }
+
+      changeset = Endpoint.changeset(endpoint_with_both, %{integration_uuid: nil})
+
+      # integration_uuid clears (cast accepts nil), api_key untouched.
+      assert {:ok, nil} = Ecto.Changeset.fetch_change(changeset, :integration_uuid)
+      assert :error = Ecto.Changeset.fetch_change(changeset, :api_key)
+    end
+
+    test "an invalid changeset (validation failure) doesn't matter — clear happens at cast time" do
+      # The clear is wired into the changeset itself, so an invalid
+      # changeset still has the clear baked in. But Repo.update/insert
+      # won't run if the changeset is invalid — so api_key stays put
+      # at the DB layer. This test pins the changeset shape; the
+      # repo-level transaction guarantee is exercised by the
+      # integration suite below.
+      legacy_endpoint = %Endpoint{
+        name: "Legacy",
+        provider: "openrouter",
+        model: "a/b",
+        api_key: "sk-legacy"
+      }
+
+      uuid = UUIDv7.generate()
+
+      changeset =
+        Endpoint.changeset(legacy_endpoint, %{
+          integration_uuid: uuid,
+          # Empty name → invalid
+          name: ""
+        })
+
+      refute changeset.valid?
+      # api_key clear is staged in the changeset, but the changeset
+      # won't reach the DB. Repo.update would short-circuit on errors.
+      assert {:ok, ""} = Ecto.Changeset.fetch_change(changeset, :api_key)
+    end
+  end
+
   describe "create_endpoint/2 (integration)" do
     test "inserts a row and returns the struct" do
       {:ok, endpoint} =

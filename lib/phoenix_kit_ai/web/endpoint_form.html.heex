@@ -12,8 +12,13 @@
 
     <%!-- Form Content (constrained width) --%>
     <div class="max-w-3xl mx-auto">
-      <%!-- Form --%>
-      <.form for={@form} phx-change="validate" phx-submit="save" class="space-y-6">
+      <.form
+        for={@form}
+        phx-change="validate"
+        phx-submit="save"
+        class="space-y-6"
+        autocomplete="off"
+      >
         <%!-- Basic Info Card --%>
         <div class="card bg-base-100 shadow-lg">
           <div class="card-body">
@@ -68,6 +73,77 @@
                 on_select="select_openrouter_connection"
                 empty_url={PhoenixKit.Utils.Routes.path("/admin/settings/integrations/new")}
               />
+            </div>
+
+            <%!-- Legacy API key recovery field.
+
+                 Renders only when the endpoint is in the "stuck migration"
+                 state — the legacy `api_key` column is populated but no
+                 Integration is selected (`integration_uuid` is nil). This
+                 happens after a partial migration failure or for
+                 pre-migration endpoints whose migrate_legacy/0 pass
+                 didn't complete.
+
+                 The field is read-only and password-masked by default
+                 (eye icon to reveal). A copy button puts the value on
+                 the clipboard so the operator can paste it into a new
+                 Integration via Settings → Integrations → Add.
+
+                 On save, when the user picks an Integration, the
+                 changeset clears `api_key` to NULL in the same DB
+                 transaction (`Endpoint.maybe_clear_legacy_api_key/1`) —
+                 so this recovery card disappears and stays gone, even
+                 if the integration is later unselected. By design: once
+                 the operator has explicitly migrated, falling back to
+                 a stale legacy key is misleading more than helpful. --%>
+            <div
+              :if={
+                @endpoint && @endpoint.api_key && @endpoint.api_key != "" &&
+                  is_nil(@endpoint.integration_uuid)
+              }
+              class="mt-4 rounded-lg border border-warning/40 bg-warning/5 p-4"
+            >
+              <div class="flex items-center gap-2 mb-1">
+                <.icon name="hero-exclamation-triangle" class="w-4 h-4 text-warning" />
+                <span class="font-medium text-sm">{gettext("Legacy API key (recovery)")}</span>
+              </div>
+              <p class="text-xs text-base-content/60 mb-3">
+                {gettext(
+                  "This endpoint still has an api_key from before the Integrations system. Copy it and paste it into a new Integration above to migrate. The field will be removed once you connect this endpoint to an Integration."
+                )}
+              </p>
+
+              <%!-- Plain `type="text"` — this is an API key, not a
+                   site login, so we don't want browsers / password
+                   managers to vault it. Plaintext display is also
+                   the operator's intent here (they're trying to
+                   read the value to copy it). --%>
+              <div class="flex gap-2 items-center">
+                <input
+                  id="legacy-api-key-field"
+                  type="text"
+                  value={@endpoint.api_key}
+                  readonly
+                  class="input input-sm input-bordered flex-1 font-mono text-xs"
+                  autocomplete="off"
+                />
+                <button
+                  type="button"
+                  id="legacy-api-key-copy"
+                  phx-hook="CopyToClipboard"
+                  data-copy-target="#legacy-api-key-field"
+                  class="btn btn-sm btn-outline"
+                >
+                  <span data-copy-idle class="inline-flex items-center gap-1">
+                    <.icon name="hero-clipboard" class="w-4 h-4" />
+                    {gettext("Copy")}
+                  </span>
+                  <span data-copy-feedback class="hidden inline-flex items-center gap-1 text-success">
+                    <.icon name="hero-check" class="w-4 h-4" />
+                    {gettext("Copied!")}
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
