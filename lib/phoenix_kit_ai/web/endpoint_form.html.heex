@@ -354,7 +354,9 @@
                   </div>
                   <label class="label">
                     <span class="label-text-alt text-base-content/50">
-                      Validate API key to load available models from OpenRouter
+                      {gettext("Connect a %{provider} integration above to load available models",
+                        provider: Endpoint.provider_label(@current_provider)
+                      )}
                     </span>
                   </label>
                 <% else %>
