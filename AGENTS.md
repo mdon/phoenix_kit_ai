@@ -259,11 +259,48 @@ and logs a `Logger.warning` identifying the endpoint by name + UUID.
 When the legacy `api_key` is populated but `integration_uuid` is
 still NULL (V107 couldn't match, or `migrate_legacy/0` didn't reach
 this endpoint), the endpoint edit form renders a "Legacy API key
-(recovery)" card under the integration picker. Read-only,
-password-masked, with a copy button. Lets the operator recover the
-key and paste it into a new Integration without bouncing back to
-OpenRouter. The card disappears once an integration is selected and
-saved.
+(recovery)" card under the integration picker. Read-only, with a
+copy button. Lets the operator recover the key and paste it into a
+new Integration without bouncing back to OpenRouter. The card
+disappears once an integration is selected and saved.
+
+### Orphaned integration handling
+
+When an endpoint's `integration_uuid` is set but doesn't resolve to
+a current connection (the integration was deleted since the
+endpoint was wired up), `load_endpoint/2` keeps `active_connection`
+nil — it does NOT silently auto-pick an unrelated single connection
+that happens to be available. The orphaned uuid flows through
+`:selected_uuids` to the integration picker, which renders its
+"Integration deleted — Missing" warning card. The operator has to
+explicitly pick a new connection. The same logic protects
+`reload_connections/1` against silently rebinding endpoints when
+integrations are added or removed via PubSub.
+
+### Endpoints list — connection-health badges + integration row
+
+The endpoint card surfaces three independent signals:
+
+1. **Enabled badge** (`Active` / `Disabled`) — config state, derived
+   from `endpoint.enabled`.
+2. **Health badge** — derived from `integration_uuid` lookup against
+   the per-render `integrations_by_uuid` map. Surfaces:
+   - `Integration missing` (red) — uuid set but doesn't resolve
+   - `Integration error` (red) — resolves with `status="error"`
+   - `Not connected` (yellow) — resolves but never reached `connected`
+   - `No integration` (yellow) — `integration_uuid` is nil
+   - (no badge) — connected and healthy
+3. **Integration + key row** — `🔗 Integration: <name>  🔑 Key: sk-or-v1…abcd`.
+   Mask format is first-8 + last-4 via
+   `PhoenixKitAI.Web.Endpoints.mask_api_key/1`. Short keys (< 14
+   chars) fully mask to `•••` to avoid leaking most of a short
+   secret. For orphaned endpoints the row reads "Integration:
+   Deleted, Key: —"; for endpoints with `integration_uuid: nil`,
+   it reads "Integration: none, Key: —".
+
+The `integrations_by_uuid` map is loaded once per render in
+`reload_endpoints/1` so per-endpoint rendering doesn't N+1 on
+`Integrations.connected?/1` or `get_credentials/1`.
 
 ### Manual cleanup flow
 
