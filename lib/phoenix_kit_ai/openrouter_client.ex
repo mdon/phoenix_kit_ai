@@ -726,7 +726,7 @@ defmodule PhoenixKitAI.OpenRouterClient do
     architecture["modality"] || ""
   end
 
-  defp provider_from_model(model, fallback_provider \\ nil) do
+  defp provider_from_model(model, fallback_provider) do
     case String.split(model.id, "/", parts: 2) do
       # OpenRouter shape: "anthropic/claude-3-opus" → "anthropic"
       [provider, _name] -> provider

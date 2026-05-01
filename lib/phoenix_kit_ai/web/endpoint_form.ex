@@ -324,35 +324,6 @@ defmodule PhoenixKitAI.Web.EndpointForm do
     {:noreply, socket}
   end
 
-  defp maybe_handle_provider_change(params, socket) do
-    new_provider = params["provider"]
-    current_provider = socket.assigns[:current_provider]
-
-    provider_changed? =
-      is_binary(new_provider) and is_binary(current_provider) and new_provider != current_provider
-
-    if provider_changed? do
-      params = Map.put(params, "base_url", nil)
-
-      socket =
-        socket
-        |> assign(:active_connection, nil)
-        |> assign(:selected_uuids, [])
-        |> assign(:integration_connected, false)
-        |> assign(:models, [])
-        |> assign(:models_grouped, [])
-        |> assign(:selected_model, nil)
-        |> assign(:selected_provider, nil)
-        |> assign(:provider_models, [])
-        |> stop_model_fetch_indicators()
-        |> assign(:models_error, nil)
-
-      {params, socket}
-    else
-      {params, socket}
-    end
-  end
-
   @impl true
   def handle_event("select_provider", %{"provider" => ""}, socket) do
     # Reset provider selection
@@ -567,6 +538,35 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       |> parse_string_list("stop")
 
     save_endpoint(socket, params)
+  end
+
+  defp maybe_handle_provider_change(params, socket) do
+    new_provider = params["provider"]
+    current_provider = socket.assigns[:current_provider]
+
+    provider_changed? =
+      is_binary(new_provider) and is_binary(current_provider) and new_provider != current_provider
+
+    if provider_changed? do
+      params = Map.put(params, "base_url", nil)
+
+      socket =
+        socket
+        |> assign(:active_connection, nil)
+        |> assign(:selected_uuids, [])
+        |> assign(:integration_connected, false)
+        |> assign(:models, [])
+        |> assign(:models_grouped, [])
+        |> assign(:selected_model, nil)
+        |> assign(:selected_provider, nil)
+        |> assign(:provider_models, [])
+        |> stop_model_fetch_indicators()
+        |> assign(:models_error, nil)
+
+      {params, socket}
+    else
+      {params, socket}
+    end
   end
 
   defp reload_connections(socket) do
