@@ -73,35 +73,18 @@ repo_available =
       # Build the schema directly from core's versioned migrations —
       # same call the host app makes in production. Core's V40 creates
       # the `uuid-ossp` / `pgcrypto` extensions + `uuid_generate_v7()`
-      # function; V57+ creates the AI tables. No module-owned DDL.
+      # function; V57+ creates the AI tables; V107 adds the
+      # `integration_uuid` column + UNIQUE index on `lower(name)` that
+      # this module's schema and tests depend on. No module-owned DDL.
+      #
+      # Standalone runs against Hex `phoenix_kit ~> 1.7` will fail at
+      # boot with "column integration_uuid does not exist" if the
+      # published Hex version pre-dates V107 — that's expected. The
+      # canonical test channel for this module is via
+      # `phoenix_kit_parent` (path-dep `override: true` resolves
+      # `phoenix_kit` to the local checkout, which has V107). See
+      # ~/.claude memory `feedback_run_tests_via_parent.md`.
       Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, all: true, log: false)
-
-      # Forward-compat shim: PhoenixKit V107 adds
-      # `phoenix_kit_ai_endpoints.integration_uuid` so endpoints can
-      # pin to a specific integration row by uuid. Until that V107 is
-      # published as a Hex release, this `IF NOT EXISTS` step ensures
-      # the standalone AI test DB has the column whether the dep is
-      # at V96, V107, or later. Once V107 lands in Hex this becomes a
-      # silent no-op and can be removed.
-      TestRepo.query!("""
-      ALTER TABLE phoenix_kit_ai_endpoints
-      ADD COLUMN IF NOT EXISTS integration_uuid uuid
-      """)
-
-      TestRepo.query!("""
-      CREATE INDEX IF NOT EXISTS phoenix_kit_ai_endpoints_integration_uuid_index
-      ON phoenix_kit_ai_endpoints (integration_uuid)
-      """)
-
-      # Same forward-compat shim for V107's UNIQUE index on `lower(name)`.
-      # `Endpoint.changeset/2`'s `unique_constraint(:name)` was dead
-      # code until V107 added the index; until V107 ships in Hex we
-      # mirror it here so the unique-constraint test exercises the
-      # real production behavior.
-      TestRepo.query!("""
-      CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_ai_endpoints_name_index
-      ON phoenix_kit_ai_endpoints (lower(name))
-      """)
 
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true
