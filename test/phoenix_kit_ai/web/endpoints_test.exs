@@ -129,26 +129,6 @@ defmodule PhoenixKitAI.Web.EndpointsTest do
     end
   end
 
-  describe "mask_api_key/1" do
-    alias PhoenixKitAI.Web.Endpoints
-
-    test "masks a long key as first-8 + last-4 with an ellipsis" do
-      assert Endpoints.mask_api_key("sk-or-v1-abcdefghijklmnop") == "sk-or-v1…mnop"
-    end
-
-    test "fully masks short keys (under 14 chars) to avoid leaking most of the secret" do
-      assert Endpoints.mask_api_key("short") == "•••"
-      # 13 chars — still under the threshold.
-      assert Endpoints.mask_api_key("0123456789012") == "•••"
-    end
-
-    test "renders nil/empty/non-binary as a plain dash" do
-      assert Endpoints.mask_api_key(nil) == "—"
-      assert Endpoints.mask_api_key("") == "—"
-      assert Endpoints.mask_api_key(:atom) == "—"
-    end
-  end
-
   describe "toggle_endpoint" do
     test "flipping enabled persists, surfaces a flash, and emits an activity row",
          %{conn: conn} do

@@ -167,8 +167,9 @@ defmodule PhoenixKitAI.OpenRouterClient.LegacyFallbackTest do
         capture_log(fn ->
           # Capture log silently — the deprecation warning fires for
           # any api_key path use, but that's not what this test pins.
-          assert {"Authorization", "Bearer sk-or-v1-fallback"} in
-                   OpenRouterClient.build_headers_from_endpoint(endpoint)
+          assert {"Authorization", "Bearer sk-or-v1-fallback"} in OpenRouterClient.build_headers_from_endpoint(
+                   endpoint
+                 )
         end)
 
       assert is_binary(headers)
@@ -187,8 +188,9 @@ defmodule PhoenixKitAI.OpenRouterClient.LegacyFallbackTest do
       }
 
       capture_log(fn ->
-        assert {"Authorization", "Bearer sk-or-v1-nil-fallback"} in
-                 OpenRouterClient.build_headers_from_endpoint(endpoint)
+        assert {"Authorization", "Bearer sk-or-v1-nil-fallback"} in OpenRouterClient.build_headers_from_endpoint(
+                 endpoint
+               )
       end)
     end
   end

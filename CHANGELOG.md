@@ -1,3 +1,30 @@
+## 0.2.0 - 2026-05-02
+
+### Added
+- Multi-provider support: Mistral and DeepSeek endpoints alongside OpenRouter
+- Reasoning chain-of-thought capture (reasoning_effort, reasoning_max_tokens) in request history
+- Strict-UUID Integrations API — endpoints pin to a specific integration row via `integration_uuid`
+- Legacy `api_key` auto-migration with idempotency guards and `:persistent_term` rate-limiting
+- Integration-health badges on endpoints list (missing, error, not connected)
+- Integration name + masked API key display on endpoint cards
+- SSRF guard on `base_url` (blocks localhost, RFC1918, link-local, IPv6 loopback/ULA)
+- `endpoint.masked_api_key/1` head+tail mask (first 8 + last 4 chars)
+- Provider-switch resets model selector to avoid stale cross-provider model IDs
+
+### Changed
+- Move LiveView data loading from `mount/3` to `handle_params/3` (avoids double-fetch)
+- Endpoint form wires through changeset on integration deselect
+- `OpenRouterClient` lazy-promotes legacy provider strings to `integration_uuid` on read
+- Model fetcher generalized to any OpenAI-compatible `/models` endpoint
+- DRY credential resolution across completion, validation, and model fetch
+
+### Fixed
+- Provider-switch URL reuse bug — switching provider now fetches models from the new provider's base URL
+- Duplicated `mask_api_key/1` removed from Endpoints LiveView (consolidated into schema helper)
+- `migrate_legacy/0` now surfaces inner `:error` instead of masking it as `{:ok, _}`
+- Snapshot-based UUID lookups in migration prevent N+1 queries
+- Compile warnings resolved against phoenix_kit 1.7.x
+
 ## 0.1.5 - 2026-04-12
 
 ### Fixed

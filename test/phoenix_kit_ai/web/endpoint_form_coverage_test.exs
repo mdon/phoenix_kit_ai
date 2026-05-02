@@ -342,6 +342,56 @@ defmodule PhoenixKitAI.Web.EndpointFormCoverageTest do
       assert is_binary(render(view))
     end
 
+    # Regression: when editing an existing endpoint and the operator
+    # switches the provider dropdown, the next model fetch must hit the
+    # NEW provider's URL — not the saved `endpoint.base_url` (which is
+    # for the old provider). Pre-fix, `current_models_base_url/1`
+    # preferred the saved URL unconditionally, so a Mistral integration
+    # picked after switching providers would have its model list fetched
+    # from openrouter.ai with the Mistral key (wrong host, wrong list).
+    test "{:fetch_models, _} after provider switch hits the new provider URL",
+         %{conn: conn} do
+      stub_module = PhoenixKitAI.Web.EndpointFormCoverageTest.ProviderSwitchUrlStub
+      test_pid = self()
+
+      Req.Test.stub(stub_module, fn conn ->
+        send(test_pid, {:fetched_url, conn.host, conn.request_path})
+        Plug.Conn.send_resp(conn, 200, Jason.encode!(%{"data" => []}))
+      end)
+
+      Application.put_env(:phoenix_kit_ai, :req_options,
+        plug: {Req.Test, stub_module},
+        retry: false
+      )
+
+      on_exit(fn -> Application.delete_env(:phoenix_kit_ai, :req_options) end)
+
+      # Endpoint is saved as openrouter. base_url is set to OpenRouter's
+      # URL by the changeset's `maybe_set_default_base_url`.
+      ep = fixture_endpoint(provider: "openrouter")
+
+      {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/#{ep.uuid}/edit")
+      Req.Test.allow(stub_module, self(), view.pid)
+
+      # Operator switches to Mistral via the form. `current_provider`
+      # flips to "mistral" but `socket.assigns.endpoint.base_url` is
+      # still the OpenRouter URL until save.
+      render_change(view, "validate", %{
+        "endpoint" => %{
+          "name" => ep.name,
+          "provider" => "mistral",
+          "model" => ""
+        }
+      })
+
+      send(view.pid, {:fetch_models, "sk-test-key"})
+      _ = render(view)
+
+      assert_receive {:fetched_url, host, path}, 1_000
+      assert host == "api.mistral.ai", "expected mistral host, got #{inspect(host)}"
+      assert path == "/v1/models", "expected /v1/models, got #{inspect(path)}"
+    end
+
     test "{:fetch_models, api_key} success path populates models_grouped + selected_model",
          %{conn: conn} do
       # Drive the success branch of `handle_info({:fetch_models, _}, _)`
@@ -509,7 +559,12 @@ defmodule PhoenixKitAI.Web.EndpointFormCoverageTest do
       # otherwise leave a misleading `nil` if we asserted right after.
       stub_module = PhoenixKitAI.Web.EndpointFormCoverageTest.RetryStub
       Req.Test.stub(stub_module, fn conn -> Plug.Conn.send_resp(conn, 500, "{}") end)
-      Application.put_env(:phoenix_kit_ai, :req_options, plug: {Req.Test, stub_module}, retry: false)
+
+      Application.put_env(:phoenix_kit_ai, :req_options,
+        plug: {Req.Test, stub_module},
+        retry: false
+      )
+
       on_exit(fn -> Application.delete_env(:phoenix_kit_ai, :req_options) end)
 
       {:ok, view, _html} = live(conn, "/en/admin/ai/endpoints/new")

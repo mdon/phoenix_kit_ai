@@ -232,7 +232,7 @@
                         <span class="font-medium text-base-content/70">{gettext("Key:")}</span>
                         <span class="font-mono">
                           {if integration,
-                            do: PhoenixKitAI.Web.Endpoints.mask_api_key(integration.data["api_key"]),
+                            do: PhoenixKitAI.Endpoint.masked_api_key(integration.data["api_key"]),
                             else: "—"}
                         </span>
                       </div>

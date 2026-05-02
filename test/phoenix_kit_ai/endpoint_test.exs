@@ -144,15 +144,23 @@ defmodule PhoenixKitAI.EndpointTest do
       assert Endpoint.masked_api_key("") == "Not set"
     end
 
-    test "preserves the last 4 characters for inspection" do
-      assert Endpoint.masked_api_key("sk-or-v1-1234567890abcdef") ==
-               String.duplicate("*", 21) <> "cdef"
+    test "renders head+tail with an ellipsis for long keys" do
+      # First 8 + ellipsis + last 4 — recognisable provider prefix
+      # (`sk-or-v1`) retained, identifying suffix (`cdef`) retained.
+      assert Endpoint.masked_api_key("sk-or-v1-1234567890abcdef") == "sk-or-v1…cdef"
     end
 
-    test "handles short keys gracefully" do
-      # Short keys are masked in full (nothing meaningful to reveal)
-      result = Endpoint.masked_api_key("abc")
-      assert is_binary(result)
+    test "fully masks short keys (< 14 chars) to avoid leaking most of the secret" do
+      # A 13-char key with the head+tail shape would only have one
+      # elided char in the middle — useless. Under the threshold we
+      # collapse to bullets entirely.
+      assert Endpoint.masked_api_key("abc") == "•••"
+      assert Endpoint.masked_api_key("0123456789012") == "•••"
+    end
+
+    test "renders non-binary garbage as a placeholder" do
+      assert Endpoint.masked_api_key(:atom) == "Not set"
+      assert Endpoint.masked_api_key(123) == "Not set"
     end
   end
 

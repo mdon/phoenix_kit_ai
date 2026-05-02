@@ -445,15 +445,21 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
   @impl true
   def handle_event("select_provider_connection", %{"action" => "deselect"}, socket) do
-    # Clicking the currently-selected card unpicks it. Write nil into
-    # the form params so save/2 persists the unpinning instead of
-    # re-using the last-stamped value.
-    updated_params = Map.put(socket.assigns.form.params, "integration_uuid", nil)
-    form = %{socket.assigns.form | params: updated_params}
+    # Clicking the currently-selected card unpicks it. Round-trip
+    # through the changeset so future field-level validators on
+    # `:integration_uuid` (or anything else cast alongside it) run
+    # for free — bypassing the changeset and mutating `form.params`
+    # directly was a footgun waiting to happen.
+    new_params = Map.put(socket.assigns.form.params, "integration_uuid", nil)
+
+    changeset =
+      (socket.assigns.endpoint || %Endpoint{})
+      |> AI.change_endpoint(new_params)
+      |> Map.put(:action, :validate)
 
     socket =
       socket
-      |> assign(:form, form)
+      |> assign(:form, to_form(changeset))
       |> assign(:active_connection, nil)
       |> assign(:selected_uuids, [])
       |> assign(:integration_connected, false)
@@ -962,23 +968,29 @@ defmodule PhoenixKitAI.Web.EndpointForm do
     end
   end
 
-  # Resolves the base URL the model fetcher should hit. Prefers the
-  # endpoint's saved `base_url` (in case the operator overrode it),
-  # falls back to the schema default for the currently-selected
-  # provider, then to OpenRouter's URL as a last resort. This is
-  # what keeps Mistral / DeepSeek model fetches honest — the saved
-  # endpoint may not exist yet on the new-endpoint flow, so we have
-  # to derive from the form-side `current_provider` assign instead.
+  # Resolves the base URL the model fetcher should hit.
+  #
+  # Reuses the saved `endpoint.base_url` ONLY when the form's currently
+  # selected provider matches the endpoint's saved provider. Otherwise
+  # the operator switched providers in edit mode and the saved URL is
+  # for a different host — falling back to it would silently misroute
+  # the model fetch (e.g. fetch from openrouter.ai while the active
+  # integration is a Mistral key). Falls through to the schema default
+  # for the form-side provider, then to OpenRouter's URL as a last
+  # resort. The new-endpoint flow has no saved endpoint, so it always
+  # takes the second branch.
   defp current_models_base_url(socket) do
-    endpoint_url = socket.assigns[:endpoint] && socket.assigns.endpoint.base_url
+    current_provider = socket.assigns[:current_provider]
+    endpoint = socket.assigns[:endpoint]
+    endpoint_url = endpoint && endpoint.base_url
 
     cond do
-      is_binary(endpoint_url) and endpoint_url != "" ->
+      (endpoint && endpoint.provider == current_provider) and
+        is_binary(endpoint_url) and endpoint_url != "" ->
         endpoint_url
 
-      is_binary(socket.assigns[:current_provider]) ->
-        Endpoint.default_base_url(socket.assigns.current_provider) ||
-          OpenRouterClient.base_url()
+      is_binary(current_provider) ->
+        Endpoint.default_base_url(current_provider) || OpenRouterClient.base_url()
 
       true ->
         OpenRouterClient.base_url()

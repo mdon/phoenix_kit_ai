@@ -621,28 +621,6 @@ defmodule PhoenixKitAI.Web.Endpoints do
   # Activity attribution — passed through to AI.update_endpoint/3 and
   # AI.delete_endpoint/2 so the mutation is logged against the right
   # actor. See PhoenixKitAI moduledoc for the activity logging pattern.
-  # Masks an api_key for display in the endpoint cards: shows the
-  # first 8 + last 4 characters. Picks an OpenRouter-style key
-  # apart cleanly (`sk-or-v1-…abcd`) — recognisable provider
-  # prefix retained, identifying suffix retained, middle elided.
-  # Short keys (< 14 chars) get fully masked so we don't accidentally
-  # expose most of the key.
-  @doc false
-  def mask_api_key(nil), do: "—"
-  def mask_api_key(""), do: "—"
-
-  def mask_api_key(key) when is_binary(key) do
-    if String.length(key) < 14 do
-      "•••"
-    else
-      head = String.slice(key, 0, 8)
-      tail = String.slice(key, -4..-1)
-      head <> "…" <> tail
-    end
-  end
-
-  def mask_api_key(_), do: "—"
-
   defp actor_opts(socket) do
     role = if admin?(socket), do: "admin", else: "user"
 

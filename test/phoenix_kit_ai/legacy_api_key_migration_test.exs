@@ -237,7 +237,11 @@ defmodule PhoenixKitAI.LegacyApiKeyMigrationTest do
       # Three distinct integration uuids — no accidental sharing
       # across the imported groups.
       uuids =
-        MapSet.new([reloaded_a.integration_uuid, reloaded_b.integration_uuid, reloaded_c.integration_uuid])
+        MapSet.new([
+          reloaded_a.integration_uuid,
+          reloaded_b.integration_uuid,
+          reloaded_c.integration_uuid
+        ])
 
       assert MapSet.size(uuids) == 3
 

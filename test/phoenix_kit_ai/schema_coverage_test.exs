@@ -64,15 +64,15 @@ defmodule PhoenixKitAI.SchemaCoverageTest do
       assert %Ecto.Changeset{changes: %{last_validated_at: _}} = changeset
     end
 
-    test "masked_api_key/1 — short keys are fully masked" do
-      assert Endpoint.masked_api_key("short") == "*****"
-      assert Endpoint.masked_api_key("12345678") == "********"
+    test "masked_api_key/1 — short keys (< 14 chars) collapse to bullets" do
+      assert Endpoint.masked_api_key("short") == "•••"
+      assert Endpoint.masked_api_key("12345678") == "•••"
+      # 13-char boundary — still under the threshold
+      assert Endpoint.masked_api_key("0123456789012") == "•••"
     end
 
-    test "masked_api_key/1 — long keys keep last 4 visible" do
-      result = Endpoint.masked_api_key("sk-or-v1-abcdef123456")
-      assert String.ends_with?(result, "3456")
-      assert String.starts_with?(result, "*")
+    test "masked_api_key/1 — long keys render head+tail with ellipsis" do
+      assert Endpoint.masked_api_key("sk-or-v1-abcdef123456") == "sk-or-v1…3456"
     end
   end
 

@@ -516,17 +516,33 @@ defmodule PhoenixKitAI do
       grouped_by_key = Enum.group_by(candidates, & &1.api_key)
       total_groups = map_size(grouped_by_key)
 
+      # Snapshot the existing OpenRouter connections once so the
+      # `:already_exists` fallback is a map lookup rather than a fresh
+      # `list_connections/1` query per group. On a deployment with N
+      # distinct legacy keys re-running migration, this collapses
+      # `O(groups × connections)` reads down to one. Connections
+      # created during the loop come back via `add_connection`'s
+      # `{:ok, %{uuid: _}}` directly, so they don't need the cache.
+      existing_uuids = snapshot_connection_uuids("openrouter")
+
       migrated_count =
         grouped_by_key
         |> Enum.with_index(1)
         |> Enum.reduce(0, fn {{api_key, endpoints}, index}, acc ->
           name = legacy_connection_name(total_groups, index)
-          acc + migrate_endpoint_group(name, api_key, endpoints)
+          acc + migrate_endpoint_group(name, api_key, endpoints, existing_uuids)
         end)
 
       mark_legacy_api_key_migration_complete()
       {:migrated, migrated_count}
     end
+  end
+
+  defp snapshot_connection_uuids(provider) do
+    PhoenixKit.Integrations.list_connections(provider)
+    |> Map.new(fn conn -> {conn.name, conn.uuid} end)
+  rescue
+    _ -> %{}
   end
 
   defp list_legacy_api_key_endpoints do
@@ -551,18 +567,18 @@ defmodule PhoenixKitAI do
   defp legacy_connection_name(1, _index), do: "default"
   defp legacy_connection_name(_total, index), do: "imported-#{index}"
 
-  defp migrate_endpoint_group(name, api_key, endpoints) do
+  defp migrate_endpoint_group(name, api_key, endpoints, existing_uuids) do
     full_key = "openrouter:#{name}"
 
     # Two-step write under core's strict-UUID Integrations API:
     # add_connection/3 creates (or surfaces) the row and returns its
     # uuid; save_setup/3 then stores the legacy api_key against that
-    # uuid. `:already_exists` on re-runs is fine — fall back to
-    # looking up the existing row's uuid.
+    # uuid. `:already_exists` on re-runs is fine — pull the existing
+    # row's uuid out of the snapshot taken before the loop started.
     integration_uuid =
       case PhoenixKit.Integrations.add_connection("openrouter", name) do
         {:ok, %{uuid: uuid}} -> uuid
-        {:error, :already_exists} -> lookup_integration_uuid("openrouter", name)
+        {:error, :already_exists} -> Map.get(existing_uuids, name)
         _ -> nil
       end
 
@@ -605,23 +621,6 @@ defmodule PhoenixKitAI do
     end
   rescue
     _ -> 0
-  end
-
-  # Look up the just-created integration row's uuid by scanning
-  # `list_connections/1`. We could use the newer
-  # `Integrations.find_uuid_by_provider_name/1` primitive when
-  # available, but `list_connections/1` has been in core since the
-  # Integrations system shipped — works against any phoenix_kit
-  # version this module's deps allow.
-  defp lookup_integration_uuid(provider, name) do
-    PhoenixKit.Integrations.list_connections(provider)
-    |> Enum.find(fn conn -> conn.name == name end)
-    |> case do
-      %{uuid: uuid} -> uuid
-      _ -> nil
-    end
-  rescue
-    _ -> nil
   end
 
   defp update_endpoints_provider(endpoints, new_provider, integration_uuid) do
@@ -707,18 +706,26 @@ defmodule PhoenixKitAI do
     credentials_result = run_legacy_api_key_migration()
     references_result = sweep_provider_string_to_integration_uuid()
 
-    {:ok,
-     %{
-       credentials_migration: credentials_result,
-       reference_migration: references_result
-     }}
+    summary = %{
+      credentials_migration: credentials_result,
+      reference_migration: references_result
+    }
+
+    # Surface inner sweep failures at the outer return shape so the
+    # orchestrator (`PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0`)
+    # can pattern-match on `{:ok, _}` to decide "ran cleanly". Wrapping
+    # `:error` inside `{:ok, %{reference_migration: :error}}` would
+    # silently swallow the failure for any caller that doesn't drill
+    # into the map.
+    case references_result do
+      :error -> {:error, {:sweep_failed, summary}}
+      _ -> {:ok, summary}
+    end
   rescue
     e ->
       require Logger
 
-      Logger.warning(
-        "[PhoenixKitAI] migrate_legacy/0 raised: #{Exception.message(e)}"
-      )
+      Logger.warning("[PhoenixKitAI] migrate_legacy/0 raised: #{Exception.message(e)}")
 
       {:error, e}
   end
@@ -747,7 +754,16 @@ defmodule PhoenixKitAI do
       {:migrated, migrated}
     end
   rescue
-    _ -> :error
+    e ->
+      require Logger
+
+      Logger.warning(fn ->
+        "[PhoenixKitAI] reference sweep crashed: " <>
+          "exception=#{inspect(e.__struct__)}, " <>
+          "message=#{Exception.message(e)}"
+      end)
+
+      :error
   end
 
   defp list_endpoints_needing_uuid_promotion do

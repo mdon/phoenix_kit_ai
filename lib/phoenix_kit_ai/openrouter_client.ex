@@ -460,12 +460,13 @@ defmodule PhoenixKitAI.OpenRouterClient do
           # promotions with infra issues. Don't include
           # `Exception.message/1` raw — some exception structs embed
           # query bindings that could leak provider/api_key context.
-          Logger.warning(fn ->
-            "[OpenRouterClient] lazy promotion of integration_uuid failed: " <>
-              "endpoint_uuid=#{endpoint.uuid}, " <>
-              "exception=#{inspect(e.__struct__)}"
-          end)
-
+          #
+          # Rate-limited via `:persistent_term` so a stuck endpoint
+          # (e.g. read-only replica routing failures) doesn't flood
+          # the logs with one warning per chat completion. One warning
+          # per endpoint per VM lifetime is enough to surface the
+          # underlying infra issue.
+          warn_promotion_failed_once(endpoint.uuid, e.__struct__)
           :ok
       catch
         :exit, reason ->
@@ -551,6 +552,30 @@ defmodule PhoenixKitAI.OpenRouterClient do
   end
 
   def warn_legacy_api_key(_), do: :ok
+
+  # One warning per endpoint per VM for lazy-promotion write failures.
+  # Same mechanism as `warn_legacy_api_key/1` — `:persistent_term`
+  # gives O(1) check + write, survives across processes. Operators
+  # see one warning when promotion first fails for an endpoint and
+  # can investigate; the request hot path stays quiet on subsequent
+  # calls even if the underlying infra issue persists.
+  defp warn_promotion_failed_once(uuid, exception_struct) do
+    key_term = {__MODULE__, :promotion_failed, uuid}
+
+    case :persistent_term.get(key_term, :unwarned) do
+      :warned ->
+        :ok
+
+      :unwarned ->
+        :persistent_term.put(key_term, :warned)
+
+        Logger.warning(fn ->
+          "[OpenRouterClient] lazy promotion of integration_uuid failed: " <>
+            "endpoint_uuid=#{uuid}, " <>
+            "exception=#{inspect(exception_struct)}"
+        end)
+    end
+  end
 
   @doc """
   Returns the base URL for OpenRouter API.

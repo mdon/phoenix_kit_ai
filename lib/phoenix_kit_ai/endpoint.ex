@@ -294,18 +294,31 @@ defmodule PhoenixKitAI.Endpoint do
   def default_base_url(_), do: nil
 
   @doc """
-  Masks the API key for display, showing only the last 4 characters.
+  Masks the API key for display.
+
+  - `nil` or `""` → `"Not set"`.
+  - Keys shorter than 14 chars → `"•••"` (a 13-char key would otherwise
+    leak most of itself with the head+tail shape).
+  - Longer keys → first 8 + `…` + last 4 (e.g. `"sk-or-v1…mnop"`).
+    Recognisable provider prefix retained, identifying suffix retained,
+    middle elided. Useful for human-recognition in admin cards while
+    still hiding the bulk of the secret.
   """
   @spec masked_api_key(String.t() | nil) :: String.t()
   def masked_api_key(nil), do: "Not set"
   def masked_api_key(""), do: "Not set"
 
   def masked_api_key(api_key) when is_binary(api_key) do
-    case String.length(api_key) do
-      len when len <= 8 -> String.duplicate("*", len)
-      len -> String.duplicate("*", len - 4) <> String.slice(api_key, -4..-1)
+    if String.length(api_key) < 14 do
+      "•••"
+    else
+      head = String.slice(api_key, 0, 8)
+      tail = String.slice(api_key, -4..-1)
+      head <> "…" <> tail
     end
   end
+
+  def masked_api_key(_), do: "Not set"
 
   @doc """
   Returns a display label for the provider.
