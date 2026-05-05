@@ -84,7 +84,15 @@ repo_available =
       # `phoenix_kit_parent` (path-dep `override: true` resolves
       # `phoenix_kit` to the local checkout, which has V107). See
       # ~/.claude memory `feedback_run_tests_via_parent.md`.
-      Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, all: true, log: false)
+      #
+      # `ensure_current/2` (core 1.7.105+ / phoenix_kit#515) re-applies
+      # any newly-shipped Vxxx migrations on every boot by passing a
+      # fresh wall-clock version to Ecto.Migrator. Replaces the
+      # `Ecto.Migrator.run([{0, PhoenixKit.Migration}], :up, all: true)`
+      # pattern, which silently stopped re-applying once `0` was
+      # recorded in `schema_migrations` — see
+      # `dev_docs/migration_cleanup.md` for the staleness story.
+      PhoenixKit.Migration.ensure_current(TestRepo, log: false)
 
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true
