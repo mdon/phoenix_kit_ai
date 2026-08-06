@@ -42,7 +42,7 @@ defmodule PhoenixKitAI.Web.AuthHelpers do
   def admin?(socket) do
     case socket.assigns[:phoenix_kit_current_scope] do
       nil -> false
-      scope -> Scope.admin?(scope)
+      scope -> Scope.can_access_admin_area?(scope)
     end
   end
 end
