@@ -115,6 +115,10 @@ defmodule PhoenixKitAI.Request do
     field(:input_tokens, :integer, default: 0)
     field(:output_tokens, :integer, default: 0)
     field(:total_tokens, :integer, default: 0)
+    # MISNOMER (kept for schema compat): despite the name, the stored unit
+    # is NANODOLLARS — 1e-6 dollars (see TTSPricing / Completion) — so
+    # cents = value ÷ 10_000. Multiple external reviewers have misread
+    # this as literal cents; convert accordingly in every consumer.
     field(:cost_cents, :integer)
     field(:latency_ms, :integer)
     field(:status, :string, default: "success")

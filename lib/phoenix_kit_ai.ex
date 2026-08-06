@@ -2075,8 +2075,10 @@ defmodule PhoenixKitAI do
         e ->
           Logger.error("AI usage sink #{inspect(module)} failed: #{Exception.message(e)}")
       catch
-        :exit, reason ->
-          Logger.error("AI usage sink #{inspect(module)} exited: #{inspect(reason)}")
+        # `kind, reason` (not just :exit) — a sink that THROWS must not
+        # break request logging either (the panel's contract-gap find).
+        kind, reason ->
+          Logger.error("AI usage sink #{inspect(module)} #{kind}: #{inspect(reason)}")
       end
     end)
 
