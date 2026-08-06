@@ -85,6 +85,7 @@ defmodule PhoenixKitAI.Components.AITranslate.FormGlue do
       ai_form_binding: binding,
       ai_resource_type: resource_type,
       ai_resource_uuid: uuid,
+      ai_value_mode?: false,
       ai_translation_available?: available?,
       ai_in_flight: [],
       ai_scope: :missing,
@@ -99,12 +100,25 @@ defmodule PhoenixKitAI.Components.AITranslate.FormGlue do
     |> assign_endpoint_prompt_state(available?)
   end
 
-  def assign_ai_translation(socket, _resource_type, _resource, binding) do
-    Phoenix.Component.assign(socket,
+  # No persisted resource (:new). VALUE MODE when the binding exports
+  # `source_fields/2`: the glue translates the live form's primary values
+  # directly (supervised tasks, no Oban/PubSub — results are self-sent in
+  # the same message shape) and folds them into the changeset, so they
+  # persist with the eventual create. Bindings without the callback keep
+  # the old disabled-until-saved behavior.
+  def assign_ai_translation(socket, resource_type, _resource, binding) do
+    value_mode? =
+      Code.ensure_loaded?(binding) and function_exported?(binding, :source_fields, 2)
+
+    available? = value_mode? and Translations.available?()
+
+    socket
+    |> Phoenix.Component.assign(
       ai_form_binding: binding,
-      ai_resource_type: nil,
+      ai_resource_type: resource_type,
       ai_resource_uuid: nil,
-      ai_translation_available?: false,
+      ai_value_mode?: value_mode?,
+      ai_translation_available?: available?,
       ai_in_flight: [],
       ai_scope: :missing,
       ai_modal_open: false,
@@ -113,13 +127,9 @@ defmodule PhoenixKitAI.Components.AITranslate.FormGlue do
       ai_total: 0,
       ai_slow: false,
       ai_slow_timer_ref: nil,
-      ai_slow_token: nil,
-      ai_endpoints: [],
-      ai_prompts: [],
-      ai_selected_endpoint: nil,
-      ai_selected_prompt: nil,
-      ai_default_prompt_exists: false
+      ai_slow_token: nil
     )
+    |> assign_endpoint_prompt_state(available?)
   end
 
   # The endpoint/prompt lookups hit Settings + the AI plugin, so only run them
@@ -263,6 +273,36 @@ defmodule PhoenixKitAI.Components.AITranslate.FormGlue do
       end
       |> Enum.reject(&(&1 in socket.assigns.ai_in_flight))
 
+    if socket.assigns[:ai_value_mode?] do
+      dispatch_value_mode(socket, targets, endpoint, prompt)
+    else
+      dispatch_record_bulk(socket, targets, endpoint, prompt)
+    end
+  end
+
+  # A stale/crafted empty target — no-op.
+  defp do_dispatch_ai(socket, lang, _endpoint, _prompt)
+       when is_binary(lang) and lang == "",
+       do: socket
+
+  # Single language (current tab). Refuse to translate INTO the source.
+  defp do_dispatch_ai(socket, lang, endpoint, prompt) do
+    if lang == Multilang.primary_language() do
+      flash_error(socket, gettext("Can't translate the source language."))
+    else
+      do_dispatch_single(socket, lang, endpoint, prompt)
+    end
+  end
+
+  defp do_dispatch_single(socket, lang, endpoint, prompt) do
+    if socket.assigns[:ai_value_mode?] do
+      dispatch_value_mode(socket, [lang] -- socket.assigns.ai_in_flight, endpoint, prompt)
+    else
+      dispatch_record_single(socket, lang, endpoint, prompt)
+    end
+  end
+
+  defp dispatch_record_bulk(socket, targets, endpoint, prompt) do
     base = %{
       resource_type: socket.assigns.ai_resource_type,
       resource_uuid: socket.assigns.ai_resource_uuid,
@@ -290,21 +330,7 @@ defmodule PhoenixKitAI.Components.AITranslate.FormGlue do
     end
   end
 
-  # A stale/crafted empty target — no-op.
-  defp do_dispatch_ai(socket, lang, _endpoint, _prompt)
-       when is_binary(lang) and lang == "",
-       do: socket
-
-  # Single language (current tab). Refuse to translate INTO the source.
-  defp do_dispatch_ai(socket, lang, endpoint, prompt) do
-    if lang == Multilang.primary_language() do
-      flash_error(socket, gettext("Can't translate the source language."))
-    else
-      do_dispatch_single(socket, lang, endpoint, prompt)
-    end
-  end
-
-  defp do_dispatch_single(socket, lang, endpoint, prompt) do
+  defp dispatch_record_single(socket, lang, endpoint, prompt) do
     params = %{
       resource_type: socket.assigns.ai_resource_type,
       resource_uuid: socket.assigns.ai_resource_uuid,
@@ -331,6 +357,117 @@ defmodule PhoenixKitAI.Components.AITranslate.FormGlue do
       {:error, _reason} ->
         flash_error(socket, gettext("Could not start translation."))
     end
+  end
+
+  # ── Value mode (unsaved resources) ────────────────────────────────
+  #
+  # No record → no Oban job, no PubSub: one SUPERVISED task streams the
+  # target languages (bounded concurrency) through the same
+  # `Translation.translate_fields/6` core the worker uses, sending each
+  # result to THIS LiveView in the exact message shape the PubSub path
+  # delivers — so the whole progress/stall/apply machinery is reused
+  # verbatim, and the applied changeset persists with the create.
+  @value_mode_concurrency 4
+
+  defp dispatch_value_mode(socket, [], _endpoint, _prompt),
+    do: Phoenix.LiveView.put_flash(socket, :info, gettext("Nothing to translate."))
+
+  defp dispatch_value_mode(socket, targets, endpoint, prompt) do
+    case value_source_fields(socket) do
+      fields when map_size(fields) > 0 ->
+        start_value_mode_tasks(socket, targets, endpoint, prompt, fields)
+
+        socket
+        |> add_in_flight(targets)
+        |> bump_started(length(targets))
+        |> Phoenix.LiveView.put_flash(
+          :info,
+          ngettext(
+            "Translating %{count} language…",
+            "Translating %{count} languages…",
+            length(targets)
+          )
+        )
+
+      _ ->
+        Phoenix.LiveView.put_flash(
+          socket,
+          :info,
+          gettext("Nothing to translate yet — fill in the primary-language fields first.")
+        )
+    end
+  end
+
+  # The binding's form-sourced values, defensively normalized: only
+  # binary keys/values, blanks dropped (a blank field has nothing to say).
+  defp value_source_fields(socket) do
+    binding = socket.assigns.ai_form_binding
+
+    binding.source_fields(socket.assigns.ai_resource_type, socket.assigns)
+    |> Enum.filter(fn
+      {k, v} when is_binary(k) and is_binary(v) -> String.trim(v) != ""
+      _ -> false
+    end)
+    |> Map.new()
+  rescue
+    _ -> %{}
+  end
+
+  defp start_value_mode_tasks(socket, targets, endpoint, prompt, fields) do
+    lv = self()
+
+    job = %{
+      endpoint: endpoint,
+      prompt: prompt,
+      source_lang: Multilang.primary_language(),
+      fields: fields,
+      resource_type: socket.assigns.ai_resource_type,
+      actor: actor_uuid(socket)
+    }
+
+    Task.Supervisor.start_child(PhoenixKit.TaskSupervisor, fn ->
+      PhoenixKit.TaskSupervisor
+      |> Task.Supervisor.async_stream_nolink(
+        targets,
+        &translate_value_lang(lv, &1, job),
+        max_concurrency: @value_mode_concurrency,
+        ordered: false,
+        timeout: :infinity
+      )
+      |> Stream.run()
+    end)
+  end
+
+  # EVERY exit path must message the LV, or the language stays in-flight
+  # forever and the form's save stays blocked.
+  defp translate_value_lang(lv, lang, job) do
+    case safe_translate_fields(lang, job) do
+      {:ok, translated} ->
+        send(
+          lv,
+          {:ai_translation, :translation_completed, %{target_lang: lang, fields: translated}}
+        )
+
+      {:error, reason} ->
+        send(lv, {:ai_translation, :translation_failed, %{target_lang: lang, reason: reason}})
+    end
+  end
+
+  defp safe_translate_fields(lang, job) do
+    PhoenixKitAI.Translation.translate_fields(
+      job.endpoint,
+      job.prompt,
+      job.source_lang,
+      lang,
+      job.fields,
+      actor_uuid: job.actor,
+      source: "PhoenixKitAI.FormGlue (unsaved #{job.resource_type})",
+      attribution: %{"resource_type" => job.resource_type, "actor_uuid" => job.actor}
+    )
+  rescue
+    e -> {:error, {:exception, Exception.message(e)}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   defp add_in_flight(socket, langs),

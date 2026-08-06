@@ -37,4 +37,22 @@ defmodule PhoenixKitAI.Components.AITranslate.FormBinding do
 
   @doc "The acting user's UUID (or nil) for the translation audit trail."
   @callback actor_uuid(socket :: Phoenix.LiveView.Socket.t()) :: Ecto.UUID.t() | nil
+
+  @doc """
+  OPTIONAL — the primary-language source text for VALUE MODE, read from the
+  live form's assigns: `%{"field" => "text"}` (engine field names, non-blank
+  strings; blank/missing fields are simply not translated).
+
+  Exporting this callback is what turns AI translation ON for UNSAVED
+  resources (`:new` forms): with no record for the Oban worker to load or
+  write, the glue translates these values directly and folds the results
+  into the live changeset via `apply_translation/4` — they persist with the
+  eventual create. Bindings without it keep the old behavior (AI disabled
+  until the record exists).
+  """
+  @callback source_fields(resource_type :: String.t(), assigns :: map()) :: %{
+              optional(String.t()) => String.t()
+            }
+
+  @optional_callbacks source_fields: 2
 end
