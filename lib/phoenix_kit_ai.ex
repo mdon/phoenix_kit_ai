@@ -2043,16 +2043,64 @@ defmodule PhoenixKitAI do
 
   def get_request(_), do: nil
 
+  # Opaque attribution payload: string-keyed, nil for junk (this package
+  # records it verbatim; usage sinks interpret it).
+  defp normalize_attribution(map) when is_map(map) and map_size(map) > 0 do
+    Map.new(map, fn {k, v} -> {to_string(k), v} end)
+  end
+
+  defp normalize_attribution(_), do: nil
+
+  defp maybe_put_attribution(metadata, nil), do: metadata
+
+  defp maybe_put_attribution(metadata, attribution),
+    do: Map.put(metadata, :attribution, attribution)
+
+  @doc """
+  Usage sinks: every discovered module exporting `handle_ai_usage/1`
+  receives each persisted `%Request{}` — the zero-coupling observer seam
+  (the Translatables discovery pattern), first consumer being the
+  projects work ledger's AI attribution. Best-effort per sink: a raising
+  sink is logged and never breaks request logging.
+  """
+  def dispatch_usage_sinks(%Request{} = request) do
+    PhoenixKit.ModuleRegistry.all_modules()
+    |> Enum.filter(fn module ->
+      Code.ensure_loaded?(module) and function_exported?(module, :handle_ai_usage, 1)
+    end)
+    |> Enum.each(fn module ->
+      try do
+        module.handle_ai_usage(request)
+      rescue
+        e ->
+          Logger.error("AI usage sink #{inspect(module)} failed: #{Exception.message(e)}")
+      catch
+        :exit, reason ->
+          Logger.error("AI usage sink #{inspect(module)} exited: #{inspect(reason)}")
+      end
+    end)
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
   @doc """
   Creates a new AI request record.
 
   Used to log every AI API call for tracking and statistics.
   """
   def create_request(attrs) do
-    %Request{}
-    |> Request.changeset(attrs)
-    |> repo().insert()
-    |> broadcast_request_change(:request_created)
+    result =
+      %Request{}
+      |> Request.changeset(attrs)
+      |> repo().insert()
+      |> broadcast_request_change(:request_created)
+
+    with {:ok, request} <- result do
+      dispatch_usage_sinks(request)
+      {:ok, request}
+    end
   end
 
   @doc """
@@ -2316,9 +2364,13 @@ defmodule PhoenixKitAI do
       source = Keyword.get(opts, :source) || auto_source
 
       # Extract prompt info if present (from ask_with_prompt, complete_with_system_prompt)
+      # + the ATTRIBUTION payload (the projects work-ledger seam): an
+      # opaque caller map recorded into request metadata — this package
+      # never interprets it; usage sinks (handle_ai_usage/1) do.
       prompt_info = %{
         prompt_uuid: Keyword.get(opts, :prompt_uuid),
-        prompt_name: Keyword.get(opts, :prompt_name)
+        prompt_name: Keyword.get(opts, :prompt_name),
+        attribution: normalize_attribution(Keyword.get(opts, :attribution))
       }
 
       merged_opts = merge_endpoint_opts(endpoint, opts)
@@ -2904,14 +2956,16 @@ defmodule PhoenixKitAI do
     capture_content = capture_request_content?()
     normalized = if capture_content, do: normalize_messages(messages), else: nil
 
-    base_metadata = %{
-      temperature: endpoint.temperature,
-      max_tokens: endpoint.max_tokens,
-      # Debug context (source tracking)
-      source: source,
-      stacktrace: stacktrace,
-      caller_context: caller_context
-    }
+    base_metadata =
+      %{
+        temperature: endpoint.temperature,
+        max_tokens: endpoint.max_tokens,
+        # Debug context (source tracking)
+        source: source,
+        stacktrace: stacktrace,
+        caller_context: caller_context
+      }
+      |> maybe_put_attribution(prompt_info[:attribution])
 
     metadata =
       if capture_content do

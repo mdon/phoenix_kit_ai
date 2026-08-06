@@ -179,7 +179,7 @@ defmodule PhoenixKitAI.Translation do
 
     ai_opts =
       opts
-      |> Keyword.take([:source])
+      |> Keyword.take([:source, :attribution])
       |> Keyword.put_new(:source, "PhoenixKitAI.Translation")
 
     log_request(source_lang, target_lang, Map.keys(fields), opts)

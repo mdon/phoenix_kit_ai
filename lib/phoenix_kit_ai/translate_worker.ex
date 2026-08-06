@@ -119,7 +119,16 @@ defmodule PhoenixKitAI.TranslateWorker do
                actor_uuid: ctx.actor,
                resource_type: ctx.type,
                resource_uuid: ctx.uuid,
-               source: "PhoenixKitAI.TranslateWorker"
+               source: "PhoenixKitAI.TranslateWorker",
+               # The usage-sink attribution payload (opaque to this
+               # package): lets a sink resolve the resource to whatever
+               # it accounts against — the projects work ledger resolves
+               # assignments/projects from exactly this pair.
+               attribution: %{
+                 "resource_type" => ctx.type,
+                 "resource_uuid" => ctx.uuid,
+                 "actor_uuid" => ctx.actor
+               }
              ) do
           {:ok, translated} ->
             persist(ctx, translated)
