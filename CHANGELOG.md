@@ -1,3 +1,16 @@
+## 0.18.0 - 2026-08-10
+
+### Changed
+- **⚠️ Requires `phoenix_kit ~> 2.0`.** The pin moved from `>= 1.7.214` to `~> 2.0`, so this release no longer resolves against core 1.7. Core 2.0.0 squashes the migration chain to a `V135` floor and *refuses* to migrate a database below it — read core's 2.0.0 CHANGELOG before upgrading, and check `mix phoenix_kit.status` first. A host below V135 must install `phoenix_kit 1.7.236` (the migration bridge) and migrate up to at least V135 before moving to 2.0. Nothing in this package touches migration internals; the change here is the pin itself.
+
+### Added
+- **Usage-sink dispatch (`handle_ai_usage/1`).** Every persisted `%Request{}` is now offered to each discovered module exporting `handle_ai_usage/1` — the zero-coupling observer seam, mirroring the Translatables discovery pattern. Best-effort per sink: a sink that raises, throws, or exits is logged and never breaks request logging. First consumer is the projects work ledger's AI attribution. See `PhoenixKitAI.dispatch_usage_sinks/1`.
+- **Opaque `:attribution` metadata on AI calls.** Callers may pass `attribution: %{...}`; it is normalized to string keys and recorded verbatim into request metadata. This package never interprets it — usage sinks do. `TranslateWorker` and the form glue now populate it with `resource_type` / `resource_uuid` / `actor_uuid`.
+- **VALUE MODE for AI-translate on unsaved forms.** A `FormBinding` may now export the optional `source_fields/2` callback returning the primary-language values straight from the live form's assigns. When present, `:new` forms get AI translation instead of being disabled-until-saved: with no record for the Oban worker to load, the glue translates the live values through the same `Translation.translate_fields/6` core, over supervised tasks (concurrency 4) that self-send results in the exact message shape the PubSub path delivers — so the whole progress/stall/apply state machine is reused unchanged, and the applied changeset persists with the eventual create. Bindings without the callback keep the old behaviour.
+
+### Documentation
+- `Request.cost_cents` is documented at the schema as the misnomer it is: the stored unit is the same 1/1,000,000-of-a-dollar unit `TtsPricing` uses, **not** cents, so cents = value ÷ 10,000. Multiple external reviewers had misread it; the field name is kept for schema compatibility.
+
 ## 0.17.1 - 2026-07-27
 
 ### Changed
