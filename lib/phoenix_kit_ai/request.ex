@@ -1,5 +1,5 @@
 defmodule PhoenixKitAI.Request do
-  use Gettext, backend: PhoenixKitWeb.Gettext
+  use Gettext, backend: PhoenixKitAI.Gettext
 
   @moduledoc """
   AI request schema for PhoenixKit AI system.

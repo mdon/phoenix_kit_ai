@@ -18,7 +18,7 @@ defmodule PhoenixKitAI.Web.Endpoints do
   """
 
   use PhoenixKitWeb, :live_view
-  use Gettext, backend: PhoenixKitWeb.Gettext
+  use Gettext, backend: PhoenixKitAI.Gettext
 
   require Logger
 

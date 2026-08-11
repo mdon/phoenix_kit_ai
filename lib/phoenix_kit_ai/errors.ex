@@ -7,7 +7,7 @@ defmodule PhoenixKitAI.Errors do
   consumers can pattern-match on atoms and decide their own presentation.
   Anything user-facing (flash messages, error banners) goes through
   `message/1` which wraps each mapping in `gettext/1` using the
-  `PhoenixKitWeb.Gettext` backend.
+  `PhoenixKitAI.Gettext` backend.
 
   ## Supported reason shapes
 
@@ -26,7 +26,7 @@ defmodule PhoenixKitAI.Errors do
       "API error: 503"
   """
 
-  use Gettext, backend: PhoenixKitWeb.Gettext
+  use Gettext, backend: PhoenixKitAI.Gettext
 
   @doc """
   Translates an error reason (atom or tagged tuple) into a user-facing

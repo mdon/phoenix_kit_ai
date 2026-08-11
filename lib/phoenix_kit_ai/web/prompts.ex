@@ -18,7 +18,7 @@ defmodule PhoenixKitAI.Web.Prompts do
   """
 
   use PhoenixKitWeb, :live_view
-  use Gettext, backend: PhoenixKitWeb.Gettext
+  use Gettext, backend: PhoenixKitAI.Gettext
 
   require Logger
 

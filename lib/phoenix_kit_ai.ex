@@ -937,7 +937,11 @@ defmodule PhoenixKitAI do
       key: module_key(),
       label: "AI",
       icon: "hero-sparkles",
-      description: "AI endpoints, prompts, and usage tracking"
+      description: "AI endpoints, prompts, and usage tracking",
+      # Renders the label translated in the admin permissions matrix, the
+      # same way the sidebar tabs below translate theirs.
+      gettext_backend: PhoenixKitAI.Gettext,
+      gettext_domain: "default"
     }
   end
 
@@ -957,7 +961,9 @@ defmodule PhoenixKitAI do
         group: :admin_modules,
         subtab_display: :when_active,
         highlight_with_subtabs: false,
-        redirect_to_first_subtab: true
+        redirect_to_first_subtab: true,
+        gettext_backend: PhoenixKitAI.Gettext,
+        gettext_domain: "default"
       },
       %Tab{
         id: :admin_ai_endpoints,
@@ -967,7 +973,9 @@ defmodule PhoenixKitAI do
         priority: 641,
         level: :admin,
         permission: module_key(),
-        parent: :admin_ai
+        parent: :admin_ai,
+        gettext_backend: PhoenixKitAI.Gettext,
+        gettext_domain: "default"
       },
       %Tab{
         id: :admin_ai_prompts,
@@ -977,7 +985,9 @@ defmodule PhoenixKitAI do
         priority: 642,
         level: :admin,
         permission: module_key(),
-        parent: :admin_ai
+        parent: :admin_ai,
+        gettext_backend: PhoenixKitAI.Gettext,
+        gettext_domain: "default"
       },
       %Tab{
         id: :admin_ai_playground,
@@ -987,7 +997,9 @@ defmodule PhoenixKitAI do
         priority: 643,
         level: :admin,
         permission: module_key(),
-        parent: :admin_ai
+        parent: :admin_ai,
+        gettext_backend: PhoenixKitAI.Gettext,
+        gettext_domain: "default"
       },
       %Tab{
         id: :admin_ai_usage,
@@ -997,7 +1009,9 @@ defmodule PhoenixKitAI do
         priority: 644,
         level: :admin,
         permission: module_key(),
-        parent: :admin_ai
+        parent: :admin_ai,
+        gettext_backend: PhoenixKitAI.Gettext,
+        gettext_domain: "default"
       }
     ]
   end

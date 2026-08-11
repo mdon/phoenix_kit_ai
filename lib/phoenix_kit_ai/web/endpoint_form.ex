@@ -7,6 +7,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
   """
 
   use PhoenixKitWeb, :live_view
+  use Gettext, backend: PhoenixKitAI.Gettext
 
   require Logger
 
@@ -982,7 +983,7 @@ defmodule PhoenixKitAI.Web.EndpointForm do
 
     case result do
       {:ok, endpoint} ->
-        action = if socket.assigns.endpoint, do: "updated", else: "created"
+        action = if socket.assigns.endpoint, do: :updated, else: :created
         message = save_success_message(endpoint, action)
 
         {:noreply,
@@ -1007,8 +1008,17 @@ defmodule PhoenixKitAI.Web.EndpointForm do
   # endpoint's `provider` points at an integration that is not currently
   # connected AND there is no legacy `api_key` fallback. Save still
   # succeeds — the user is free to connect the integration afterwards.
+  #
+  # `action` is an atom (not a raw English string) precisely so the flash
+  # is fully translatable — interpolating "created"/"updated" into a
+  # gettext msgid would leave that word untranslated in every non-English
+  # locale. Same two-literal-calls pattern as `prompt_form.ex`.
   defp save_success_message(endpoint, action) do
-    base = gettext("Endpoint %{action} successfully", action: action)
+    base =
+      case action do
+        :created -> gettext("Endpoint created successfully")
+        :updated -> gettext("Endpoint updated successfully")
+      end
 
     case integration_warning(endpoint) do
       nil -> base
