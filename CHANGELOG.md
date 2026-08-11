@@ -1,3 +1,13 @@
+## 0.18.2 - 2026-08-11
+
+### Fixed
+
+- **`PhoenixKitAi.version/0` reported 0.18.0 in the 0.18.1 release.** The
+  version is kept in three places — `mix.exs`, the hardcoded `version/0`, and
+  the test asserting it — and 0.18.1 moved only the first, so the published
+  package reported a version it was not and its own version test failed. All
+  three move together here.
+
 ## 0.18.1 - 2026-08-11
 
 ### Changed
