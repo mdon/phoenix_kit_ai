@@ -6,7 +6,7 @@
 
         _ ->
           {gettext("AI Endpoints"),
-           gettext("Manage AI provider endpoints and API configurations")}
+           gettext("Artificial intelligence — manage provider endpoints and API configurations")}
       end %>
 
     <.admin_page_header title={header_title} subtitle={header_subtitle} />
@@ -136,31 +136,37 @@
                   <%= if endpoint.temperature do %>
                     <div class="flex items-center gap-1">
                       <.icon name="hero-fire" class="w-4 h-4" />
-                      <span>Temp: {endpoint.temperature}</span>
+                      <span>{gettext("Temp:")} {endpoint.temperature}</span>
                     </div>
                   <% end %>
                   <%= if endpoint.max_tokens do %>
                     <div class="flex items-center gap-1">
                       <.icon name="hero-document-text" class="w-4 h-4" />
-                      <span>Max: {endpoint.max_tokens}</span>
+                      <span>{gettext("Max:")} {endpoint.max_tokens}</span>
                     </div>
                   <% end %>
                 </div>
 
                 <div class="mt-2 flex flex-wrap gap-4 text-sm">
-                  <div class="flex items-center gap-1 text-base-content/70" title="Total requests">
+                  <div class="flex items-center gap-1 text-base-content/70" title={gettext("Total requests")}>
                     <.icon name="hero-arrow-path" class="w-4 h-4" />
-                    <span>{stats.request_count} requests</span>
+                    <span>{ngettext("%{count} request", "%{count} requests", stats.request_count)}</span>
                   </div>
-                  <div class="flex items-center gap-1 text-base-content/70" title="Total tokens">
+                  <div class="flex items-center gap-1 text-base-content/70" title={gettext("Total tokens")}>
                     <.icon name="hero-document-text" class="w-4 h-4" />
-                    <span>{PhoenixKitAI.Request.format_tokens(stats.total_tokens)} tokens</span>
+                    <span>
+                      {PhoenixKitAI.Request.format_tokens(stats.total_tokens)} {ngettext(
+                        "token",
+                        "tokens",
+                        stats.total_tokens
+                      )}
+                    </span>
                   </div>
-                  <div class="flex items-center gap-1 text-base-content/70" title="Total cost">
+                  <div class="flex items-center gap-1 text-base-content/70" title={gettext("Total cost")}>
                     <.icon name="hero-currency-dollar" class="w-4 h-4" />
                     <span>{PhoenixKitAI.Request.format_cost(stats.total_cost)}</span>
                   </div>
-                  <div class="flex items-center gap-1 text-base-content/70" title="Last used">
+                  <div class="flex items-center gap-1 text-base-content/70" title={gettext("Last used")}>
                     <.icon name="hero-clock" class="w-4 h-4" />
                     <span>
                       <%= if stats[:last_used_at] do %>

@@ -74,7 +74,7 @@ defmodule PhoenixKitAI.Components.AITranslate do
   """
 
   use Phoenix.Component
-  use Gettext, backend: PhoenixKitWeb.Gettext
+  use Gettext, backend: PhoenixKitAI.Gettext
 
   alias PhoenixKitWeb.Components.Core.Icon
   alias PhoenixKitWeb.Components.MultilangForm
@@ -455,9 +455,10 @@ defmodule PhoenixKitAI.Components.AITranslate do
 
     [
       {"missing",
-       gettext("Missing only (%{count} %{plural})",
-         count: missing_count,
-         plural: ngettext_plural(missing_count, "language", "languages")
+       ngettext(
+         "Missing only (%{count} language)",
+         "Missing only (%{count} languages)",
+         missing_count
        ), missing_count == 0},
       {"all",
        gettext("All non-primary languages (%{count}, overwrites existing)", count: all_count),
@@ -568,9 +569,6 @@ defmodule PhoenixKitAI.Components.AITranslate do
       :current -> not current_scope_available?(cfg)
     end
   end
-
-  defp ngettext_plural(1, sing, _plur), do: sing
-  defp ngettext_plural(_, _sing, plur), do: plur
 
   defp blank?(nil), do: true
   defp blank?(""), do: true

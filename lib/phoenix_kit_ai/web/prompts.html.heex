@@ -81,11 +81,11 @@
               </div>
 
               <div class="mt-2 flex flex-wrap gap-4 text-sm">
-                <div class="flex items-center gap-1 text-base-content/70" title="Usage count">
+                <div class="flex items-center gap-1 text-base-content/70" title={gettext("Usage count")}>
                   <.icon name="hero-arrow-path" class="w-4 h-4" />
-                  <span>{prompt.usage_count} uses</span>
+                  <span>{ngettext("%{count} use", "%{count} uses", prompt.usage_count)}</span>
                 </div>
-                <div class="flex items-center gap-1 text-base-content/70" title="Last used">
+                <div class="flex items-center gap-1 text-base-content/70" title={gettext("Last used")}>
                   <.icon name="hero-clock" class="w-4 h-4" />
                   <span>
                     <%= if prompt.last_used_at do %>
@@ -95,7 +95,7 @@
                     <% end %>
                   </span>
                 </div>
-                <div class="flex items-center gap-1 text-base-content/70" title="Created">
+                <div class="flex items-center gap-1 text-base-content/70" title={gettext("Created")}>
                   <.icon name="hero-calendar" class="w-4 h-4" />
                   <span><.time_ago datetime={prompt.inserted_at} /></span>
                 </div>
