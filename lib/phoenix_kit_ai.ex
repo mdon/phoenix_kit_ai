@@ -78,6 +78,7 @@ defmodule PhoenixKitAI do
   """
 
   use PhoenixKit.Module
+  use Gettext, backend: PhoenixKitAI.Gettext
 
   import Ecto.Query, warn: false
   require Logger
@@ -937,7 +938,11 @@ defmodule PhoenixKitAI do
       key: module_key(),
       label: "AI",
       icon: "hero-sparkles",
-      description: "AI endpoints, prompts, and usage tracking"
+      description: "AI endpoints, prompts, and usage tracking",
+      # Renders the label translated in the admin permissions matrix, the
+      # same way the sidebar tabs below translate theirs.
+      gettext_backend: PhoenixKitAI.Gettext,
+      gettext_domain: "default"
     }
   end
 
@@ -957,7 +962,9 @@ defmodule PhoenixKitAI do
         group: :admin_modules,
         subtab_display: :when_active,
         highlight_with_subtabs: false,
-        redirect_to_first_subtab: true
+        redirect_to_first_subtab: true,
+        gettext_backend: PhoenixKitAI.Gettext,
+        gettext_domain: "default"
       },
       %Tab{
         id: :admin_ai_endpoints,
@@ -967,7 +974,9 @@ defmodule PhoenixKitAI do
         priority: 641,
         level: :admin,
         permission: module_key(),
-        parent: :admin_ai
+        parent: :admin_ai,
+        gettext_backend: PhoenixKitAI.Gettext,
+        gettext_domain: "default"
       },
       %Tab{
         id: :admin_ai_prompts,
@@ -977,7 +986,9 @@ defmodule PhoenixKitAI do
         priority: 642,
         level: :admin,
         permission: module_key(),
-        parent: :admin_ai
+        parent: :admin_ai,
+        gettext_backend: PhoenixKitAI.Gettext,
+        gettext_domain: "default"
       },
       %Tab{
         id: :admin_ai_playground,
@@ -987,7 +998,9 @@ defmodule PhoenixKitAI do
         priority: 643,
         level: :admin,
         permission: module_key(),
-        parent: :admin_ai
+        parent: :admin_ai,
+        gettext_backend: PhoenixKitAI.Gettext,
+        gettext_domain: "default"
       },
       %Tab{
         id: :admin_ai_usage,
@@ -997,8 +1010,41 @@ defmodule PhoenixKitAI do
         priority: 644,
         level: :admin,
         permission: module_key(),
-        parent: :admin_ai
+        parent: :admin_ai,
+        gettext_backend: PhoenixKitAI.Gettext,
+        gettext_domain: "default"
       }
+    ]
+  end
+
+  @doc """
+  Pins every label this module declares as a gettext msgid.
+
+  `permission_metadata/0` and `admin_tabs/0` declare their labels as plain
+  string literals, so `mix gettext.extract` never sees this file — it scans
+  for gettext macro calls, not struct fields. PhoenixKit translates them at
+  render time through each declaration's `gettext_backend`/`gettext_domain`,
+  but only if the msgid exists in this module's own catalogue.
+
+  Without this function, `"AI"`, `"Endpoints"`, `"Prompts"`, and
+  `"Playground"` would depend on `mix gettext.extract` never running, since
+  `mix gettext.merge` deletes any `.po` entry absent from a freshly built
+  `.pot` (`on_obsolete: :delete` by default) — and `"Usage"` would stay in
+  the `.pot` only by coincidence, because `gettext("Usage")` happens to
+  appear verbatim in `web/prompts.ex`. Reword that string and this tab would
+  silently revert to English with no compile error and no failing test.
+
+  `dgettext_noop/2` registers the msgid and returns it unchanged — nothing
+  here runs at request time.
+  """
+  @spec translatable_labels() :: [String.t()]
+  def translatable_labels do
+    [
+      dgettext_noop("default", "AI"),
+      dgettext_noop("default", "Endpoints"),
+      dgettext_noop("default", "Prompts"),
+      dgettext_noop("default", "Playground"),
+      dgettext_noop("default", "Usage")
     ]
   end
 

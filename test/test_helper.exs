@@ -155,7 +155,31 @@ if repo_available do
   {:ok, _} = PhoenixKitAI.Test.Endpoint.start_link()
 end
 
+# The `gettext_backend` / `gettext_domain` Tab API (PhoenixKit core PR #522)
+# is what makes admin_tabs/0's per-module i18n wiring render translated —
+# `Tab.localized_label/1` doesn't exist before it. This module's `phoenix_kit`
+# floor (~> 2.0) is well past that release, so this is normally a formality,
+# but it keeps CI green if a consumer ever resolves an older pin.
+i18n_api_available =
+  Code.ensure_loaded?(PhoenixKit.Dashboard.Tab) and
+    function_exported?(PhoenixKit.Dashboard.Tab, :localized_label, 1)
+
+unless i18n_api_available do
+  require Logger
+
+  Logger.info(
+    "[test_helper] PhoenixKit.Dashboard.Tab.localized_label/1 not available — " <>
+      "i18n tests excluded. They will run automatically once `phoenix_kit` is " <>
+      "upgraded to a release that ships the gettext_backend API."
+  )
+end
+
 # Exclude integration tests when DB is not available
-exclude = if repo_available, do: [], else: [:integration]
+exclude =
+  [
+    if(!repo_available, do: :integration),
+    if(!i18n_api_available, do: :requires_phoenix_kit_i18n_api)
+  ]
+  |> Enum.reject(&is_nil/1)
 
 ExUnit.start(exclude: exclude)

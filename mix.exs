@@ -34,7 +34,7 @@ defmodule PhoenixKitAI.MixProject do
       ],
 
       # Dialyzer
-      dialyzer: [plt_add_apps: [:phoenix_kit]],
+      dialyzer: [plt_add_apps: [:phoenix_kit], ignore_warnings: ".dialyzer_ignore.exs"],
 
       # Docs
       name: "PhoenixKitAI",
@@ -45,7 +45,7 @@ defmodule PhoenixKitAI.MixProject do
 
   def application do
     [
-      extra_applications: [:logger, :phoenix_kit]
+      extra_applications: [:logger, :gettext, :phoenix_kit]
     ]
   end
 
@@ -105,6 +105,13 @@ defmodule PhoenixKitAI.MixProject do
       # LiveView is needed for the admin pages.
       {:phoenix_live_view, "~> 1.1"},
 
+      # Per-module i18n — this package owns its own Gettext backend and
+      # catalogues under priv/gettext/ rather than borrowing core's
+      # PhoenixKitWeb.Gettext. See
+      # https://github.com/BeamLabEU/phoenix_kit/blob/main/guides/per-module-i18n.md
+      # (a relative guides/ path doesn't resolve for a Hex consumer).
+      {:gettext, "~> 1.0"},
+
       # xAI realtime voice (WebSocket streaming TTS) — the one xAI capability
       # unreachable through the shared REST completions path. Only uses
       # Xai.Realtime, so we deliberately do NOT add {:gun, ...} or
@@ -139,6 +146,8 @@ defmodule PhoenixKitAI.MixProject do
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
       files: ~w(lib priv .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
+      # ^^^^ priv ships priv/gettext/**.po — omitting it would leave every
+      # Hex install rendering raw msgids regardless of locale.
     ]
   end
 

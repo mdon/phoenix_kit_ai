@@ -43,7 +43,7 @@ defmodule PhoenixKitAI.Components.AITranslate.FormGlue do
   the patched changeset so the LV's exact form-sync behaviour is preserved.
   """
 
-  use Gettext, backend: PhoenixKitWeb.Gettext
+  use Gettext, backend: PhoenixKitAI.Gettext
 
   alias PhoenixKit.Utils.Multilang
   alias PhoenixKitAI.Translations

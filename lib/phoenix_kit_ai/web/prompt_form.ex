@@ -7,6 +7,7 @@ defmodule PhoenixKitAI.Web.PromptForm do
   """
 
   use PhoenixKitWeb, :live_view
+  use Gettext, backend: PhoenixKitAI.Gettext
 
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
