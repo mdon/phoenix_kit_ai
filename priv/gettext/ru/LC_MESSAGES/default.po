@@ -160,7 +160,7 @@ msgstr "Сменить модель"
 #: lib/phoenix_kit_ai/web/endpoint_form.html.heex:229
 #, elixir-autogen, elixir-format
 msgid "Chat / Completion"
-msgstr "Чат / завершение"
+msgstr "Чат / генерация"
 
 #: lib/phoenix_kit_ai/web/endpoints.html.heex:69
 #: lib/phoenix_kit_ai/web/endpoints.html.heex:291
@@ -669,7 +669,7 @@ msgstr "Ошибка интеграции"
 #: lib/phoenix_kit_ai/web/endpoints.html.heex:306
 #, elixir-autogen, elixir-format
 msgid "Integration missing"
-msgstr "Интеграция отсутствует"
+msgstr "Интеграция удалена"
 
 #: lib/phoenix_kit_ai/web/endpoints.html.heex:110
 #, elixir-autogen, elixir-format
@@ -874,7 +874,7 @@ msgstr "Нет включённых конечных точек."
 #: lib/phoenix_kit_ai/web/endpoints.html.heex:312
 #, elixir-autogen, elixir-format
 msgid "No integration"
-msgstr "Нет интеграции"
+msgstr "Интеграция не выбрана"
 
 #: lib/phoenix_kit_ai/errors.ex:63
 #: lib/phoenix_kit_ai/web/endpoint_form.ex:1065
@@ -1195,7 +1195,7 @@ msgstr "Отправка…"
 #: lib/phoenix_kit_ai/web/prompt_form.html.heex:63
 #, elixir-autogen, elixir-format
 msgid "Sent as the system message before the user prompt. Supports {{variables}} too."
-msgstr "Отправляется как системное сообщение перед пользовательским промптом. Также поддерживает {{переменные}}."
+msgstr "Отправляется как системное сообщение перед пользовательским промптом. Также поддерживает {{variables}}."
 
 #: lib/phoenix_kit_ai/web/endpoint_form.html.heex:580
 #, elixir-autogen, elixir-format
@@ -1556,7 +1556,7 @@ msgstr "Используется, если speak/3 вызывается без �
 #: lib/phoenix_kit_ai/web/prompts.html.heex:147
 #, elixir-autogen, elixir-format
 msgid "Uses"
-msgstr "Используется"
+msgstr "Использований"
 
 #: lib/phoenix_kit_ai/web/prompt_form.html.heex:120
 #, elixir-autogen, elixir-format
