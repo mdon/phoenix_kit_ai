@@ -19,7 +19,7 @@ PhoenixKit AI module — AI endpoint management, prompt templates, chat completi
 
 ```bash
 mix deps.get                # Install dependencies
-createdb phoenix_kit_ai_test # Create test DB (first time only)
+createdb phoenix_kit_ai_test # Create test DB (first time only) — see "Testing" below for the PGDATABASE/PGPOOL override
 mix test                    # All tests (integration tests auto-excluded without the DB)
 mix test test/phoenix_kit_ai/completion_test.exs:25   # Specific test by line
 mix format                  # Format (imports Phoenix LiveView rules)
@@ -109,6 +109,8 @@ Application env:
 
 - **Unit tests** (no DB, always run) and **integration tests** (PostgreSQL sandbox; `PhoenixKitAI.DataCase`/`LiveCase` auto-tag `:integration`, auto-excluded without the DB).
 - Test DB `phoenix_kit_ai_test` uses `PhoenixKitAI.Test.Repo` (`test/support/test_repo.ex`); `test/test_helper.exs` runs core's versioned migrations directly — no module-owned DDL.
+- `database:` / `pool_size:` in `config/test.exs` read `PGDATABASE` / `PGPOOL` instead, falling back to `phoenix_kit_ai_test` and `System.schedulers_online() * 2` when unset — same mechanism core `phoenix_kit`'s `config/test.exs` uses. Set both to point this suite at a database it doesn't own and can't `CREATEDB` for itself, e.g. a shared instance also used by sibling `phoenix_kit_*` modules: `PGDATABASE=migration_test_db PGPOOL=6 mix test`.
+- **Caution:** if `PGDATABASE` points at a database other modules also use, don't combine it with `PHOENIX_KIT_PATH=../phoenix_kit` (local core checkout) — `test_helper.exs`'s migration call would then run *that* core's migration chain against the shared database, moving its schema for every other module pointed at the same `PGDATABASE`, not just this suite.
 - `test/support/`: `test_endpoint.ex` / `test_router.ex` / `test_layouts.ex` (minimal Phoenix stack), `live_case.ex` (`fixture_endpoint/1`, `seed_openrouter_connection/2`, `fake_scope/1`, …), `data_case.ex`, `hooks.ex` (`:assign_scope` on_mount), `activity_log_assertions.ex` (`assert/refute_activity_logged/2`). Router scopes at `/en/admin/ai/…`.
 - Destructive rescue tests: `test/phoenix_kit_ai/destructive_rescue_test.exs` (`async: false`); the LV-mounted one is tagged `:destructive`, opt-in via `--include destructive`.
 - `test/phoenix_kit_ai_test.exs` verifies the behaviour callbacks (`module_key/0`, `version/0`, `admin_tabs/0`, …).
