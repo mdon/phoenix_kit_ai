@@ -1,3 +1,54 @@
+## 0.19.0 - 2026-08-12
+
+### Added
+
+- **Per-module Gettext i18n (en/ru/et).** This package now owns a
+  `PhoenixKitAI.Gettext` backend and its own catalogues under `priv/gettext/`
+  (338 msgids per locale). Previously `use PhoenixKitWeb, :live_view`
+  transitively supplied core's backend, so all 402 `gettext` calls here looked
+  their msgids up in *core's* catalogue — the interface rendered in English
+  whatever the locale, with nowhere for a translator to add strings for this
+  package. Tab and permission-matrix labels are wired through
+  `gettext_backend`/`gettext_domain`, and `translatable_labels/0` anchors the
+  five labels declared as plain struct literals so `mix gettext.extract` can
+  see them and `mix gettext.merge` stops deleting them (#17).
+- **`PGDATABASE` / `PGPOOL` overrides for the test suite.** `config/test.exs`
+  reads both from the environment, falling back to the previous hardcoded
+  database name and `System.schedulers_online() * 2`. Without them the only
+  way to run the `:integration` half of the suite was a Postgres role holding
+  `CREATEDB` — which a shared or managed instance withholds, so those ~545
+  tests silently excluded themselves and the run still exited 0. Same
+  mechanism core `phoenix_kit` already uses. CI and a plain local `mix test`
+  are unaffected (#18).
+
+### Fixed
+
+- **Foreign-key violations on `phoenix_kit_ai_requests` escaped as raw
+  exceptions.** `Request.changeset/2` declared `foreign_key_constraint/2` for
+  `:endpoint_uuid` and `:user_uuid` without an explicit `:name`, so Ecto
+  derived `phoenix_kit_ai_requests_<field>_fkey` — but core's migration chain
+  names these constraints `fk_ai_requests_endpoint_uuid` and
+  `fk_ai_requests_user_uuid`. The derived names exist on no database, so
+  neither declaration could ever match and both were dead code: logging a
+  request against a since-deleted endpoint or user raised `Ecto.ConstraintError`
+  out of `create_request/1` instead of returning `{:error, changeset}`. Both
+  constraints now pin core's actual names, and a database-free test asserts
+  no FK constraint on this changeset carries a derived `*_fkey` name.
+- **Two translated strings had raw English stitched into them**, so no
+  catalogue could translate them: the endpoint save-flash interpolated the
+  literal `"created"`/`"updated"`, and the AI-translate scope picker
+  interpolated `"language"`/`"languages"` through a hand-rolled pluraliser
+  that hardcoded English's two-form rule, making Russian's three forms
+  unreachable. Both now use real `gettext`/`ngettext` calls (#17).
+- Several tooltips and count+noun fragments in the endpoints and prompts
+  templates were never wrapped in `gettext()` at all, so they were invisible
+  to extraction regardless of backend (#17).
+
+### Changed
+
+- Dependency updates: `phoenix` 1.8.11, `beamlab_ex_aws_sqs` 5.0.1, `xai`
+  0.2.1, `hackney` 4.7.4 and the transitive set.
+
 ## 0.18.2 - 2026-08-11
 
 ### Fixed

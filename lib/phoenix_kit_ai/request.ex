@@ -166,8 +166,13 @@ defmodule PhoenixKitAI.Request do
     |> validate_number(:total_tokens, greater_than_or_equal_to: 0)
     |> validate_number(:latency_ms, greater_than_or_equal_to: 0)
     |> calculate_total_tokens()
-    |> foreign_key_constraint(:endpoint_uuid)
-    |> foreign_key_constraint(:user_uuid)
+    # Core names these constraints `fk_ai_requests_*` (v135), not the
+    # `phoenix_kit_ai_requests_<field>_fkey` that `foreign_key_constraint/2`
+    # derives by default — without an explicit `:name` the names never match,
+    # so a violation escapes as a raw `Ecto.ConstraintError` instead of a
+    # changeset error. Keep these in step with core's migration chain.
+    |> foreign_key_constraint(:endpoint_uuid, name: :fk_ai_requests_endpoint_uuid)
+    |> foreign_key_constraint(:user_uuid, name: :fk_ai_requests_user_uuid)
   end
 
   @doc """

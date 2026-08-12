@@ -529,5 +529,27 @@ defmodule PhoenixKitAI.SchemaCoverageTest do
       assert changeset.valid?
       assert Ecto.Changeset.get_field(changeset, :total_tokens) == 15
     end
+
+    # Core's migration chain (v135) names these constraints `fk_ai_requests_*`.
+    # `foreign_key_constraint/2` without an explicit `:name` derives
+    # `phoenix_kit_ai_requests_<field>_fkey` instead, which no database ever
+    # carries — so the constraint never matches and a violation escapes as a
+    # raw `Ecto.ConstraintError` rather than an `{:error, changeset}`. These
+    # assertions read the registered constraint names straight off the
+    # changeset, so they hold without a database.
+    test "changeset/2 registers FK constraints under core's actual names" do
+      changeset = Request.changeset(%Request{}, %{status: "success"})
+
+      names =
+        changeset.constraints
+        |> Enum.filter(&(&1.type == :foreign_key))
+        |> Map.new(&{&1.field, &1.constraint})
+
+      assert names[:endpoint_uuid] == "fk_ai_requests_endpoint_uuid"
+      assert names[:user_uuid] == "fk_ai_requests_user_uuid"
+
+      refute Enum.any?(names, fn {_field, name} -> String.ends_with?(name, "_fkey") end),
+             "a derived *_fkey name means the constraint can never match core's schema"
+    end
   end
 end
