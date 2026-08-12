@@ -107,7 +107,9 @@ defmodule PhoenixKitAI.MixProject do
 
       # Per-module i18n — this package owns its own Gettext backend and
       # catalogues under priv/gettext/ rather than borrowing core's
-      # PhoenixKitWeb.Gettext. See guides/per-module-i18n.md in phoenix_kit core.
+      # PhoenixKitWeb.Gettext. See
+      # https://github.com/BeamLabEU/phoenix_kit/blob/main/guides/per-module-i18n.md
+      # (a relative guides/ path doesn't resolve for a Hex consumer).
       {:gettext, "~> 1.0"},
 
       # xAI realtime voice (WebSocket streaming TTS) — the one xAI capability
