@@ -16,12 +16,6 @@ msgstr ""
 msgid "(taking longer than usual — the provider may be slow)"
 msgstr "(taking longer than usual — the provider may be slow)"
 
-#: lib/phoenix_kit_ai.ex:938
-#: lib/phoenix_kit_ai.ex:954
-#, elixir-format
-msgid "AI"
-msgstr "AI"
-
 #: lib/phoenix_kit_ai/web/endpoints.html.heex:8
 #, elixir-autogen, elixir-format
 msgid "AI Endpoints"
@@ -543,11 +537,6 @@ msgstr "Endpoint is disabled"
 msgid "Endpoint not found"
 msgstr "Endpoint not found"
 
-#: lib/phoenix_kit_ai.ex:970
-#, elixir-format
-msgid "Endpoints"
-msgstr "Endpoints"
-
 #: lib/phoenix_kit_ai/web/endpoint_form.html.heex:568
 #, elixir-autogen, elixir-format
 msgid "Enter model ID (e.g., anthropic/claude-3-haiku)"
@@ -986,11 +975,6 @@ msgstr "Pick an integration above to see optional provider-specific settings."
 msgid "Pick an integration above, then a model, to configure generation parameters."
 msgstr "Pick an integration above, then a model, to configure generation parameters."
 
-#: lib/phoenix_kit_ai.ex:994
-#, elixir-format
-msgid "Playground"
-msgstr "Playground"
-
 #: lib/phoenix_kit_ai/web/playground.ex:124
 #: lib/phoenix_kit_ai/web/playground.ex:169
 #, elixir-autogen, elixir-format
@@ -1062,11 +1046,6 @@ msgstr "Prompt not found"
 #, elixir-autogen, elixir-format
 msgid "Prompt updated successfully"
 msgstr "Prompt updated successfully"
-
-#: lib/phoenix_kit_ai.ex:982
-#, elixir-format
-msgid "Prompts"
-msgstr "Prompts"
 
 #: lib/phoenix_kit_ai/web/endpoint_form.html.heex:88
 #: lib/phoenix_kit_ai/web/endpoints.html.heex:228
@@ -1536,6 +1515,7 @@ msgstr "Update your AI endpoint configuration"
 msgid "Updating…"
 msgstr "Updating…"
 
+#: lib/phoenix_kit_ai.ex:1047
 #: lib/phoenix_kit_ai/web/prompts.ex:39
 #, elixir-autogen, elixir-format
 msgid "Usage"
@@ -1801,3 +1781,23 @@ msgid "token"
 msgid_plural "tokens"
 msgstr[0] "token"
 msgstr[1] "tokens"
+
+#: lib/phoenix_kit_ai.ex:1043
+#, elixir-autogen, elixir-format
+msgid "AI"
+msgstr "AI"
+
+#: lib/phoenix_kit_ai.ex:1044
+#, elixir-autogen, elixir-format
+msgid "Endpoints"
+msgstr "Endpoints"
+
+#: lib/phoenix_kit_ai.ex:1046
+#, elixir-autogen, elixir-format
+msgid "Playground"
+msgstr "Playground"
+
+#: lib/phoenix_kit_ai.ex:1045
+#, elixir-autogen, elixir-format
+msgid "Prompts"
+msgstr "Prompts"

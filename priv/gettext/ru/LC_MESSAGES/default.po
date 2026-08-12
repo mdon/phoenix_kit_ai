@@ -16,12 +16,6 @@ msgstr ""
 msgid "(taking longer than usual — the provider may be slow)"
 msgstr "(это занимает больше времени, чем обычно — провайдер может отвечать медленно)"
 
-#: lib/phoenix_kit_ai.ex:938
-#: lib/phoenix_kit_ai.ex:954
-#, elixir-format
-msgid "AI"
-msgstr "AI"
-
 #: lib/phoenix_kit_ai/web/endpoints.html.heex:8
 #, elixir-autogen, elixir-format
 msgid "AI Endpoints"
@@ -543,11 +537,6 @@ msgstr "Конечная точка отключена"
 msgid "Endpoint not found"
 msgstr "Конечная точка не найдена"
 
-#: lib/phoenix_kit_ai.ex:970
-#, elixir-format
-msgid "Endpoints"
-msgstr "Конечные точки"
-
 #: lib/phoenix_kit_ai/web/endpoint_form.html.heex:568
 #, elixir-autogen, elixir-format
 msgid "Enter model ID (e.g., anthropic/claude-3-haiku)"
@@ -986,11 +975,6 @@ msgstr "Выберите интеграцию выше, чтобы увидет�
 msgid "Pick an integration above, then a model, to configure generation parameters."
 msgstr "Выберите интеграцию выше, затем модель, чтобы настроить параметры генерации."
 
-#: lib/phoenix_kit_ai.ex:994
-#, elixir-format
-msgid "Playground"
-msgstr "Песочница"
-
 #: lib/phoenix_kit_ai/web/playground.ex:124
 #: lib/phoenix_kit_ai/web/playground.ex:169
 #, elixir-autogen, elixir-format
@@ -1062,11 +1046,6 @@ msgstr "Промпт не найден"
 #, elixir-autogen, elixir-format
 msgid "Prompt updated successfully"
 msgstr "Промпт успешно обновлён"
-
-#: lib/phoenix_kit_ai.ex:982
-#, elixir-format
-msgid "Prompts"
-msgstr "Промпты"
 
 #: lib/phoenix_kit_ai/web/endpoint_form.html.heex:88
 #: lib/phoenix_kit_ai/web/endpoints.html.heex:228
@@ -1538,6 +1517,7 @@ msgstr "Обновите конфигурацию конечной точки AI
 msgid "Updating…"
 msgstr "Обновление…"
 
+#: lib/phoenix_kit_ai.ex:1047
 #: lib/phoenix_kit_ai/web/prompts.ex:39
 #, elixir-autogen, elixir-format
 msgid "Usage"
@@ -1807,3 +1787,23 @@ msgid_plural "tokens"
 msgstr[0] "токен"
 msgstr[1] "токена"
 msgstr[2] "токенов"
+
+#: lib/phoenix_kit_ai.ex:1043
+#, elixir-autogen, elixir-format
+msgid "AI"
+msgstr "AI"
+
+#: lib/phoenix_kit_ai.ex:1044
+#, elixir-autogen, elixir-format
+msgid "Endpoints"
+msgstr "Конечные точки"
+
+#: lib/phoenix_kit_ai.ex:1046
+#, elixir-autogen, elixir-format
+msgid "Playground"
+msgstr "Песочница"
+
+#: lib/phoenix_kit_ai.ex:1045
+#, elixir-autogen, elixir-format
+msgid "Prompts"
+msgstr "Промпты"

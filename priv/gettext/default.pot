@@ -1515,6 +1515,7 @@ msgstr ""
 msgid "Updating…"
 msgstr ""
 
+#: lib/phoenix_kit_ai.ex:1047
 #: lib/phoenix_kit_ai/web/prompts.ex:39
 #, elixir-autogen, elixir-format
 msgid "Usage"
@@ -1780,3 +1781,23 @@ msgid "token"
 msgid_plural "tokens"
 msgstr[0] ""
 msgstr[1] ""
+
+#: lib/phoenix_kit_ai.ex:1043
+#, elixir-autogen, elixir-format
+msgid "AI"
+msgstr ""
+
+#: lib/phoenix_kit_ai.ex:1044
+#, elixir-autogen, elixir-format
+msgid "Endpoints"
+msgstr ""
+
+#: lib/phoenix_kit_ai.ex:1046
+#, elixir-autogen, elixir-format
+msgid "Playground"
+msgstr ""
+
+#: lib/phoenix_kit_ai.ex:1045
+#, elixir-autogen, elixir-format
+msgid "Prompts"
+msgstr ""
