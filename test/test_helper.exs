@@ -125,6 +125,14 @@ Application.put_env(:phoenix_kit_ai, :test_repo_available, repo_available)
 {:ok, _pid} = PhoenixKit.PubSub.Manager.start_link([])
 {:ok, _pid} = PhoenixKit.ModuleRegistry.start_link([])
 
+# `PhoenixKit.Test.Fixtures.user_fixture/1` and friends register through
+# `PhoenixKit.Users.Auth.register_user/2`, which calls the Hammer-backed rate
+# limiter — without this its ETS table does not exist and the fixture dies with
+# "the table identifier does not refer to an existing ETS table". Mirrors core's
+# own test_helper and the same lines in billing, calendar, ecommerce, projects
+# and staff.
+{:ok, _pid} = PhoenixKit.Users.RateLimiter.Backend.start_link([])
+
 # `PhoenixKit.TaskSupervisor` is the named Task.Supervisor that
 # `Task.Supervisor.start_child/2` callsites in the AI module's LVs
 # target for fire-and-forget supervised work (validate-then-fetch in
