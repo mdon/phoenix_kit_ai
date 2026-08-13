@@ -64,6 +64,28 @@ defmodule PhoenixKitAI.RequestFkConstraintsTest do
     assert request.endpoint_uuid == ep.uuid
   end
 
+  test "prompt_uuid declares both constraint names core can have created" do
+    # The database under test carries only one of the two names, so the
+    # behavioural tests above can only ever exercise that one. This asserts the
+    # other declaration is present too, which is what keeps the module working
+    # against the opposite install shape.
+    names =
+      %Request{}
+      |> Request.changeset(base_attrs())
+      |> Map.fetch!(:constraints)
+      |> Enum.filter(&(&1.field == :prompt_uuid))
+      |> MapSet.new(& &1.constraint)
+
+    assert MapSet.equal?(
+             names,
+             MapSet.new([
+               "fk_ai_requests_prompt_uuid",
+               "phoenix_kit_ai_requests_prompt_uuid_fkey"
+             ])
+           ),
+           "expected both prompt_uuid constraint names, got: #{inspect(MapSet.to_list(names))}"
+  end
+
   test "every belongs_to on the schema declares a foreign key constraint" do
     declared =
       %Request{}
