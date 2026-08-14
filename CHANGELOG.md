@@ -1,3 +1,31 @@
+## 0.19.1 - 2026-08-14
+
+### Fixed
+
+- **A request referencing a missing prompt returned a 500 instead of a changeset
+  error.** `Request.changeset/2` declared no `foreign_key_constraint` for
+  `prompt_uuid` at all, so the violation escaped as a raw
+  `Ecto.ConstraintError`. It now declares **both** names the constraint can
+  carry: core's v135 adds this foreign key twice under two names, each block
+  guarded only by its own, so a freshly migrated database has both while an
+  older one has only `phoenix_kit_ai_requests_prompt_uuid_fkey`. Ecto matches by
+  name and Postgres reports one `conname`, so the name that exists matches and
+  the other is inert — and this stays correct now that core 2.4.0's V169
+  converges the pair on the legacy name (#21, #19).
+
+- **Three tests had been asserting behaviour this package no longer has**, and
+  had been failing since 0.15.0/0.16.0 without blocking a release:
+  `speak/3`'s response shape gained `:timestamps` in 0.16.0; TTS `cost_cents`
+  stopped being `nil` in 0.15.0 when it began being estimated from
+  `TtsPricing`; and the image-generation override test asked a stored `quality`
+  default to disappear because `size` was overridden, which the code never did
+  and never should. Nothing runs `mix test` automatically here — neither
+  `precommit` nor CI on push — which is why they sat red.
+
+### Changed
+
+- Minimum `phoenix_kit` is unchanged at `~> 2.0`; the lockfile moves to 2.4.0.
+
 ## 0.19.0 - 2026-08-12
 
 ### Added

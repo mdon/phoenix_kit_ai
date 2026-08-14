@@ -263,7 +263,7 @@ defmodule PhoenixKitAI.ImageGenerationTest do
         body = Jason.decode!(raw)
 
         assert body["size"] == "1792x1024"
-        refute body["quality"] == "hd"
+        assert body["quality"] == "standard"
 
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
@@ -275,8 +275,16 @@ defmodule PhoenixKitAI.ImageGenerationTest do
 
       ep = endpoint_fixture(%{image_size: "1024x1792", image_quality: "hd"})
 
+      # Both options are passed, because both are what the test name claims to
+      # cover. It previously sent only `size:` and then asserted `quality` was
+      # NOT the stored "hd" — which asked the endpoint default to vanish
+      # because an unrelated option was overridden, and had been failing since
+      # stored image defaults were added.
       assert {:ok, _} =
-               PhoenixKitAI.generate_image(ep.uuid, "a landscape", size: "1792x1024")
+               PhoenixKitAI.generate_image(ep.uuid, "a landscape",
+                 size: "1792x1024",
+                 quality: "standard"
+               )
     end
 
     test "no stored default and no caller option omits size/quality entirely" do

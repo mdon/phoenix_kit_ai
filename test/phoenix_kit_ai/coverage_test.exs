@@ -11,6 +11,7 @@ defmodule PhoenixKitAI.CoverageTest do
 
   use PhoenixKitAI.DataCase, async: false
 
+  alias PhoenixKit.Test.Fixtures
   alias PhoenixKitAI.{Endpoint, Prompt, Request}
 
   defp endpoint_fixture(attrs \\ %{}) do
@@ -663,7 +664,7 @@ defmodule PhoenixKitAI.CoverageTest do
       # `Request.changeset/2` declares it under the name core actually creates,
       # a made-up UUID comes back as a changeset error instead of raising —
       # which this fixture's `{:ok, r} = ...` would turn into a MatchError.
-      user_uuid = PhoenixKit.Test.Fixtures.confirmed_user_fixture().uuid
+      user_uuid = Fixtures.confirmed_user_fixture().uuid
 
       r =
         request_fixture(%{

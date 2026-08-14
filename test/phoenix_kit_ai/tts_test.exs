@@ -102,12 +102,18 @@ defmodule PhoenixKitAI.TTSTest do
                PhoenixKitAI.speak(ep.uuid, "Bonjour", response_format: "wav")
     end
 
-    test "returns only :audio and :format (latency stays internal)" do
+    test "returns :audio, :format and :timestamps (latency stays internal)" do
       stub_raw(200, @audio_bytes)
       ep = endpoint_fixture()
 
       assert {:ok, result} = PhoenixKitAI.speak(ep.uuid, "Bonjour")
-      assert Map.keys(result) |> Enum.sort() == [:audio, :format]
+
+      # `:timestamps` joined the public shape in 0.16.0 (xAI with_timestamps)
+      # and is part of `speak/3`'s own @spec; it is nil for every other
+      # provider, which is what this Mistral endpoint exercises. `latency_ms`
+      # is still stripped before returning — it is logged, not exposed.
+      assert Map.keys(result) |> Enum.sort() == [:audio, :format, :timestamps]
+      assert is_nil(result.timestamps)
     end
   end
 
@@ -175,10 +181,23 @@ defmodule PhoenixKitAI.TTSTest do
 
       assert %{request_type: "tts", status: "success"} = row
       assert is_integer(row.latency_ms)
-      # No token usage for TTS — billing is per-character.
+      # No token usage for TTS — billing is per-character, so the token
+      # columns stay unset.
       assert row.input_tokens == 0
       assert row.output_tokens == 0
-      assert is_nil(row.cost_cents)
+
+      # cost_cents stopped being nil in 0.15.0: no TTS provider self-reports
+      # cost the way OpenRouter's chat completions do, so it is estimated from
+      # TtsPricing's rate table. This fixture's provider ("mistral") is in that
+      # table and the text is non-empty, so the estimate is a positive integer.
+      assert is_integer(row.cost_cents) and row.cost_cents > 0
+
+      assert row.cost_cents ==
+               PhoenixKitAI.TtsPricing.cost_nanodollars(
+                 "mistral",
+                 String.length("Bonjour, ça va ?"),
+                 byte_size(@audio_bytes)
+               )
 
       assert row.metadata["input_chars"] == String.length("Bonjour, ça va ?")
       assert row.metadata["audio_format"] == "mp3"
