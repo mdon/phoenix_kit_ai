@@ -173,6 +173,21 @@ defmodule PhoenixKitAI.Request do
     # changeset error. Keep these in step with core's migration chain.
     |> foreign_key_constraint(:endpoint_uuid, name: :fk_ai_requests_endpoint_uuid)
     |> foreign_key_constraint(:user_uuid, name: :fk_ai_requests_user_uuid)
+    # `prompt_uuid` had no declaration at all, so a bad prompt reference raised
+    # instead of returning a changeset error — the same defect as the two above.
+    #
+    # It needs BOTH names. This module pins core `~> 2.0`, and the surviving
+    # constraint name differs by install age: core's v135 adds the FK twice
+    # under two names, each guarded only by its own name, so a freshly migrated
+    # database carries `fk_ai_requests_prompt_uuid` AND
+    # `phoenix_kit_ai_requests_prompt_uuid_fkey`, while a database predating the
+    # second block carries only the latter (measured on max-dev, which has only
+    # `phoenix_kit_ai_requests_prompt_uuid_fkey`). Declaring one name would keep
+    # raising on whichever installs have the other. Ecto matches a constraint by
+    # name, so listing both is exact, not a guess — and it stays correct after a
+    # core cleanup migration converges the two.
+    |> foreign_key_constraint(:prompt_uuid, name: :fk_ai_requests_prompt_uuid)
+    |> foreign_key_constraint(:prompt_uuid, name: :phoenix_kit_ai_requests_prompt_uuid_fkey)
   end
 
   @doc """

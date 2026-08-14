@@ -659,7 +659,11 @@ defmodule PhoenixKitAI.CoverageTest do
 
     test "filter by :user_uuid restricts to that user" do
       ep = endpoint_fixture()
-      user_uuid = Ecto.UUID.generate()
+      # A real user row: `user_uuid` carries a real FK, and now that
+      # `Request.changeset/2` declares it under the name core actually creates,
+      # a made-up UUID comes back as a changeset error instead of raising —
+      # which this fixture's `{:ok, r} = ...` would turn into a MatchError.
+      user_uuid = PhoenixKit.Test.Fixtures.confirmed_user_fixture().uuid
 
       r =
         request_fixture(%{
