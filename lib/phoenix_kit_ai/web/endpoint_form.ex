@@ -46,9 +46,9 @@ defmodule PhoenixKitAI.Web.EndpointForm do
       |> assign(:textarea_class, size_class(assigns.size, "textarea"))
 
     ~H"""
-    <div class="form-control">
+    <div class="fieldset">
       <label class="label">
-        <span class={if @size == "sm", do: "label-text", else: "label-text font-medium"}>
+        <span class={if @size == "sm", do: "fieldset-legend", else: "fieldset-legend font-medium"}>
           {@definition.label}
         </span>
       </label>
@@ -216,10 +216,10 @@ defmodule PhoenixKitAI.Web.EndpointForm do
     end
   end
 
-  defp size_class("sm", "input"), do: "input input-bordered input-sm"
-  defp size_class(_, "input"), do: "input input-bordered"
-  defp size_class("sm", "textarea"), do: "textarea textarea-bordered textarea-sm"
-  defp size_class(_, "textarea"), do: "textarea textarea-bordered"
+  defp size_class("sm", "input"), do: "input input-sm"
+  defp size_class(_, "input"), do: "input"
+  defp size_class("sm", "textarea"), do: "textarea textarea-sm"
+  defp size_class(_, "textarea"), do: "textarea"
 
   defp get_max_for_field("max_tokens", _definition, selected_model) do
     selected_model && selected_model.max_completion_tokens

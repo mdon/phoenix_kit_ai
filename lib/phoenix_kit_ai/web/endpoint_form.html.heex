@@ -51,7 +51,7 @@
                  back to the previous DB value, and the toggle would snap
                  back to "on" on re-render. Same pattern as core's
                  <.checkbox> component. --%>
-            <div :if={@endpoint} class="form-control py-2">
+            <div :if={@endpoint} class="fieldset py-2">
               <label class="flex items-center gap-4 cursor-pointer">
                 <input type="hidden" name="endpoint[enabled]" value="false" />
                 <input
@@ -151,7 +151,7 @@
                   type="text"
                   value={@endpoint.api_key}
                   readonly
-                  class="input input-sm input-bordered flex-1 font-mono text-xs"
+                  class="input input-sm flex-1 font-mono text-xs"
                   autocomplete="off"
                 />
                 <button
@@ -216,14 +216,14 @@
                  fetch uses (Chat vs Text-to-Speech vs Image Generation).
                  Has its own phx-change so it doesn't ride the form's
                  "validate". --%>
-            <div class="form-control mt-4">
+            <div class="fieldset mt-4">
               <label class="label">
-                <span class="label-text font-medium">{gettext("Model Type")}</span>
+                <span class="fieldset-legend font-medium">{gettext("Model Type")}</span>
               </label>
               <select
                 name="model_type"
                 phx-change="select_model_type"
-                class="select select-bordered w-full max-w-xs"
+                class="select w-full max-w-xs"
               >
                 <option value="text" selected={@model_type == :text}>
                   {gettext("Chat / Completion")}
@@ -243,7 +243,7 @@
                   {gettext("Image Generation")}
                 </option>
               </select>
-              <p class="label-text-alt text-base-content/50 mt-1">
+              <p class="fieldset-label text-base-content/50 mt-1">
                 <%= case @model_type do %>
                   <% :tts -> %>
                     {gettext(
@@ -270,12 +270,12 @@
                  provider exposes a voice catalogue (Mistral /audio/voices,
                  fetched into @voices) we render a picker; otherwise we fall
                  back to a free-text field (e.g. OpenRouter preset names). --%>
-            <div :if={@model_type == :tts} class="form-control mt-4">
+            <div :if={@model_type == :tts} class="fieldset mt-4">
               <% current_voice =
                 get_in(@form.params, ["provider_settings", "voice"]) ||
                   (@endpoint && get_in(@endpoint.provider_settings || %{}, ["voice"])) || "" %>
               <label class="label">
-                <span class="label-text font-medium">{gettext("Default Voice")}</span>
+                <span class="fieldset-legend font-medium">{gettext("Default Voice")}</span>
               </label>
               <%= if @voices != [] do %>
                 <%!-- Two-level picker (Mistral Studio style): choose a
@@ -292,12 +292,12 @@
                 <div class="flex flex-wrap items-end gap-3">
                   <div>
                     <label class="label py-1">
-                      <span class="label-text text-sm">{gettext("Speaker")}</span>
+                      <span class="fieldset-legend text-sm">{gettext("Speaker")}</span>
                     </label>
                     <select
                       name="voice_speaker"
                       phx-change="select_voice_speaker"
-                      class="select select-bordered"
+                      class="select"
                     >
                       <%= for sp <- speakers do %>
                         <option value={sp.key} selected={sp.key == selected_speaker_key}>
@@ -308,9 +308,9 @@
                   </div>
                   <div>
                     <label class="label py-1">
-                      <span class="label-text text-sm">{gettext("Mood")}</span>
+                      <span class="fieldset-legend text-sm">{gettext("Mood")}</span>
                     </label>
-                    <select name="endpoint[provider_settings][voice]" class="select select-bordered">
+                    <select name="endpoint[provider_settings][voice]" class="select">
                       <option value="" selected={current_voice == ""}>{gettext("— Select —")}</option>
                       <%= for voice <- (active_speaker && active_speaker.voices) || [] do %>
                         <option value={voice.slug} selected={current_voice == voice.slug}>
@@ -323,10 +323,10 @@
                 <%!-- Mistral requires a voice (or ref_audio) — /audio/speech
                      returns 400 without one. The picker only renders for
                      Mistral, so this required-hint is scoped correctly. --%>
-                <p :if={current_voice == ""} class="label-text-alt text-warning mt-1">
+                <p :if={current_voice == ""} class="fieldset-label text-warning mt-1">
                   {gettext("Pick a mood — this provider can't generate speech without a voice.")}
                 </p>
-                <p :if={current_voice != ""} class="label-text-alt text-base-content/50 mt-1">
+                <p :if={current_voice != ""} class="fieldset-label text-base-content/50 mt-1">
                   {gettext("Used when speak/3 is called without an explicit voice.")}
                 </p>
               <% else %>
@@ -334,10 +334,10 @@
                   type="text"
                   name="endpoint[provider_settings][voice]"
                   value={current_voice}
-                  class="input input-bordered w-full max-w-md"
+                  class="input w-full max-w-md"
                   placeholder={gettext("e.g. casual_male")}
                 />
-                <p class="label-text-alt text-base-content/50 mt-1">
+                <p class="fieldset-label text-base-content/50 mt-1">
                   {gettext(
                     "Optional provider-specific voice id. Used when speak/3 is called without an explicit voice."
                   )}
@@ -350,7 +350,7 @@
                  OpenAI-shaped fields live on the endpoint columns;
                  xAI's live under provider_settings and are applied by
                  generate_image/3 as :aspect_ratio / :resolution. --%>
-            <div :if={@model_type == :image_gen} class="form-control mt-4">
+            <div :if={@model_type == :image_gen} class="fieldset mt-4">
               <%= if is_binary(@current_provider) and
                      PhoenixKitAI.Endpoint.base_provider(@current_provider) == "xai" do %>
                 <% current_aspect =
@@ -364,11 +364,11 @@
                 <div class="flex flex-wrap items-end gap-3">
                   <div>
                     <label class="label py-1">
-                      <span class="label-text font-medium">{gettext("Default Aspect Ratio")}</span>
+                      <span class="fieldset-legend font-medium">{gettext("Default Aspect Ratio")}</span>
                     </label>
                     <select
                       name="endpoint[provider_settings][aspect_ratio]"
-                      class="select select-bordered"
+                      class="select"
                     >
                       <option value="" selected={current_aspect == ""}>
                         {gettext("— Provider default —")}
@@ -380,11 +380,11 @@
                   </div>
                   <div>
                     <label class="label py-1">
-                      <span class="label-text font-medium">{gettext("Default Resolution")}</span>
+                      <span class="fieldset-legend font-medium">{gettext("Default Resolution")}</span>
                     </label>
                     <select
                       name="endpoint[provider_settings][resolution]"
-                      class="select select-bordered"
+                      class="select"
                     >
                       <option value="" selected={current_resolution == ""}>
                         {gettext("— Provider default —")}
@@ -395,7 +395,7 @@
                     </select>
                   </div>
                 </div>
-                <p class="label-text-alt text-base-content/50 mt-1">
+                <p class="fieldset-label text-base-content/50 mt-1">
                   {gettext(
                     "Used when generate_image/3 is called without an explicit :aspect_ratio/:resolution."
                   )}
@@ -408,9 +408,9 @@
                 <div class="flex flex-wrap items-end gap-3">
                   <div>
                     <label class="label py-1">
-                      <span class="label-text font-medium">{gettext("Default Size")}</span>
+                      <span class="fieldset-legend font-medium">{gettext("Default Size")}</span>
                     </label>
-                    <select name="endpoint[image_size]" class="select select-bordered">
+                    <select name="endpoint[image_size]" class="select">
                       <option value="" selected={current_size == ""}>
                         {gettext("— Provider default —")}
                       </option>
@@ -421,9 +421,9 @@
                   </div>
                   <div>
                     <label class="label py-1">
-                      <span class="label-text font-medium">{gettext("Default Quality")}</span>
+                      <span class="fieldset-legend font-medium">{gettext("Default Quality")}</span>
                     </label>
-                    <select name="endpoint[image_quality]" class="select select-bordered">
+                    <select name="endpoint[image_quality]" class="select">
                       <option value="" selected={current_quality == ""}>
                         {gettext("— Provider default —")}
                       </option>
@@ -433,7 +433,7 @@
                     </select>
                   </div>
                 </div>
-                <p class="label-text-alt text-base-content/50 mt-1">
+                <p class="fieldset-label text-base-content/50 mt-1">
                   {gettext(
                     "Used when generate_image/3 is called without an explicit :size/:quality."
                   )}
@@ -441,9 +441,9 @@
               <% end %>
             </div>
 
-            <div class="form-control mt-4">
+            <div class="fieldset mt-4">
               <label class="label">
-                <span class="label-text font-medium">{gettext("Current Model")} *</span>
+                <span class="fieldset-legend font-medium">{gettext("Current Model")} *</span>
               </label>
 
               <%!-- Hidden input to store the actual model value --%>
@@ -501,7 +501,7 @@
 
               <%= if @form.errors[:model] do %>
                 <label class="label">
-                  <span class="label-text-alt text-error">
+                  <span class="fieldset-label text-error">
                     {translate_error(@form.errors[:model])}
                   </span>
                 </label>
@@ -512,9 +512,9 @@
                  "Current Model", this label reads "Change model";
                  otherwise "Select model". The grid below excludes
                  the hoisted card so each model appears once. --%>
-            <div class="form-control mt-4">
+            <div class="fieldset mt-4">
               <label class="label">
-                <span class="label-text font-medium">
+                <span class="fieldset-legend font-medium">
                   <%= if has_model do %>
                     {gettext("Change Model")}
                   <% else %>
@@ -564,7 +564,7 @@
                     <input
                       type="text"
                       id="manual_model_input"
-                      class="input input-bordered join-item flex-1"
+                      class="input join-item flex-1"
                       placeholder={gettext("Enter model ID (e.g., anthropic/claude-3-haiku)")}
                       disabled={!@integration_connected}
                       phx-hook="ManualModelInput"
@@ -581,7 +581,7 @@
                     </button>
                   </div>
                   <label class="label">
-                    <span class="label-text-alt text-base-content/50">
+                    <span class="fieldset-label text-base-content/50">
                       {gettext("Connect a %{provider} integration above to load available models",
                         provider: Endpoint.provider_label(@current_provider)
                       )}
@@ -665,7 +665,7 @@
                         data-grid-id="model_grid"
                         phx-hook="ModelGridSearch"
                         placeholder={gettext("Filter models…")}
-                        class="input input-bordered input-sm w-full mb-2"
+                        class="input input-sm w-full mb-2"
                       />
 
                       <%!-- Grid excludes the currently-selected model
@@ -741,7 +741,7 @@
                   (@endpoint && @endpoint.reasoning_enabled == true) %>
 
               <div class="bg-base-200 rounded-lg p-4 mt-4">
-                <div class="form-control">
+                <div class="fieldset">
                   <.checkbox
                     name="endpoint[reasoning_enabled]"
                     checked={reasoning_enabled}
@@ -781,9 +781,9 @@
                       />
 
                       <%!-- Hide Reasoning Toggle --%>
-                      <div class="form-control">
+                      <div class="fieldset">
                         <label class="label py-1">
-                          <span class="label-text text-sm">{gettext("Visibility")}</span>
+                          <span class="fieldset-legend text-sm">{gettext("Visibility")}</span>
                         </label>
                         <.checkbox
                           name="endpoint[reasoning_exclude]"
@@ -884,7 +884,7 @@
                   }
                   placeholder={@site_url || "https://yourapp.com"}
                 />
-                <p class="label-text-alt text-base-content/50 mt-1">
+                <p class="fieldset-label text-base-content/50 mt-1">
                   <%= if @site_url do %>
                     {gettext("Defaults to site_url from")}
                     <.pk_link navigate="/admin/settings" class="link link-primary">
@@ -910,7 +910,7 @@
                   }
                   placeholder={@project_title || "My Application"}
                 />
-                <p class="label-text-alt text-base-content/50 mt-1">
+                <p class="fieldset-label text-base-content/50 mt-1">
                   {gettext("Defaults to project_title (%{title}) from", title: @project_title)}
                   <.pk_link navigate="/admin/settings" class="link link-primary">
                     {gettext("Settings")}
