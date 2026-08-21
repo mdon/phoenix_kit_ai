@@ -87,16 +87,33 @@ defmodule PhoenixKitAI.Web.PlaygroundVoiceTest do
     test "sends text and signals done through the realtime module", %{conn: conn} do
       endpoint = fixture_endpoint(provider: "xai", model: "grok-4.5")
       ws_pid = spawn(fn -> Process.sleep(:infinity) end)
+      test_pid = self()
 
+      # `Session.send_text/2` and `finish/1` are GenServer CASTS: the LiveView
+      # handler returns before the session process has consumed them, so
+      # bare expectations race `verify_on_exit!` and intermittently report
+      # "invoked 0 times". The mocks signal this process instead, and the
+      # assert_receive both synchronizes and asserts.
       expect(RealtimeMock, :connect_tts, fn _opts -> {:ok, ws_pid} end)
-      expect(RealtimeMock, :send_text, fn ^ws_pid, "Hello there" -> :ok end)
-      expect(RealtimeMock, :send_text_done, fn ^ws_pid -> :ok end)
+
+      expect(RealtimeMock, :send_text, fn ^ws_pid, "Hello there" ->
+        send(test_pid, :text_sent)
+        :ok
+      end)
+
+      expect(RealtimeMock, :send_text_done, fn ^ws_pid ->
+        send(test_pid, :text_done)
+        :ok
+      end)
 
       {:ok, view, _html} = live(conn, "/en/admin/ai/playground")
       select_endpoint(view, endpoint)
       render_click(view, "start_voice")
 
       render_submit(view, "speak_voice", %{"text" => "Hello there"})
+
+      assert_receive :text_sent, 1_000
+      assert_receive :text_done, 1_000
     end
   end
 
