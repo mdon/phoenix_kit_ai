@@ -1,3 +1,22 @@
+## 0.19.2 - 2026-08-21
+
+### Changed
+
+- **`ai_multilang_tabs` defaults now match core's headerless multilang
+  tabs.** `show_header` / `show_info` default to `false`, so AI-enabled
+  forms no longer keep a "Content Language" header row every other form
+  has lost. Pass `show_header={true}` to restore it (#22).
+
+### Fixed
+
+- **The playground voice test no longer races `verify_on_exit!`.**
+  `Session.send_text/2` and `finish/1` are casts; the LiveView handler
+  returns before the session process consumes them. The mocks now signal
+  the test process (#22).
+- **Prompt/endpoint delete-button tests no longer assume HEEx attribute
+  order** on `table_row_menu_button` (post-merge, surfaced by core
+  2.13.5).
+
 ## 0.19.1 - 2026-08-14
 
 ### Fixed

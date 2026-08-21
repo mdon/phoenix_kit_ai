@@ -202,9 +202,11 @@ defmodule PhoenixKitAI.Web.EndpointsTest do
 
       {:ok, _view, html} = live(conn, "/en/admin/ai/endpoints")
 
-      # Pin the C5 fix from the 2026-04-26 re-validation pass — matches
-      # the canonical attribute regex used elsewhere in the suite.
-      assert html =~ ~r/phx-click="delete_endpoint"[^>]+phx-disable-with/
+      # table_row_menu_button dumps rest attrs after class; HEEx may emit
+      # phx-disable-with before phx-click, so do not pin attribute order.
+      # "Deleting" distinguishes the delete item from toggle's "Updating".
+      assert html =~ ~s(phx-click="delete_endpoint")
+      assert html =~ ~r/phx-disable-with="[^"]*Deleting/
     end
   end
 

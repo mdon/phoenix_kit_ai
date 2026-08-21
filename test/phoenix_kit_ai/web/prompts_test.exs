@@ -80,7 +80,10 @@ defmodule PhoenixKitAI.Web.PromptsTest do
 
       {:ok, _view, html} = live(conn, "/en/admin/ai/prompts")
 
-      assert html =~ ~r/phx-click="delete_prompt"[^>]+phx-disable-with/
+      # table_row_menu_button dumps rest attrs after class; HEEx may emit
+      # phx-disable-with before phx-click, so do not pin attribute order.
+      assert html =~ ~s(phx-click="delete_prompt")
+      assert html =~ ~r/phx-disable-with="[^"]*Deleting/
     end
   end
 
