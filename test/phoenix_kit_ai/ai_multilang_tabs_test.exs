@@ -176,4 +176,46 @@ defmodule PhoenixKitAI.Components.AiMultilangTabsTest do
 
     refute html =~ "AI Translate"
   end
+
+  test "the Content Language header is off by default, matching core's multilang_tabs" do
+    assigns = %{tabs: tabs(), config: config()}
+
+    html =
+      rendered_to_string(~H"""
+      <.ai_multilang_tabs
+        multilang_enabled={true}
+        language_tabs={@tabs}
+        current_lang="en-US"
+        ai_translate={@config}
+      />
+      """)
+
+    # Core flipped show_header/show_info to false (2026-08-15 product call).
+    # This wrapper declares its OWN attr defaults rather than inheriting them,
+    # so nothing makes the two track each other automatically — if core's
+    # default moves again and this one does not, AI-enabled forms silently
+    # keep chrome every other form has lost. That is what this pins.
+    refute html =~ "Content Language"
+
+    # The tabs themselves are unaffected — this is about the header row only.
+    assert html =~ "German"
+  end
+
+  test "an explicit show_header still renders the header" do
+    assigns = %{tabs: tabs(), config: config()}
+
+    html =
+      rendered_to_string(~H"""
+      <.ai_multilang_tabs
+        multilang_enabled={true}
+        language_tabs={@tabs}
+        current_lang="en-US"
+        show_header={true}
+        ai_translate={@config}
+      />
+      """)
+
+    # The default changed; the attr did not go away.
+    assert html =~ "Content Language"
+  end
 end

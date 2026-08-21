@@ -316,8 +316,10 @@ defmodule PhoenixKitAI.Components.AITranslate do
   attr(:language_tabs, :list, required: true)
   attr(:current_lang, :string, required: true)
   attr(:compact, :boolean, default: nil)
-  attr(:show_header, :boolean, default: true)
-  attr(:show_info, :boolean, default: true)
+  # Defaults follow core's multilang_tabs (2026-08-15 product call: the
+  # "Content Language" header row is redundant chrome — see core's attr doc).
+  attr(:show_header, :boolean, default: false)
+  attr(:show_info, :boolean, default: false)
   attr(:class, :string, default: "card-body pb-0")
 
   attr(:ai_translate, :map,
