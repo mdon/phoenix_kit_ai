@@ -1833,9 +1833,9 @@ msgstr "Muudetud pilt"
 
 
 #: lib/phoenix_kit_ai/web/playground.html.heex:295
-#, elixir-autogen, elixir-format, fuzzy
+#, elixir-autogen, elixir-format
 msgid "Editing…"
-msgstr "Muuda"
+msgstr "Muudame…"
 
 #: lib/phoenix_kit_ai/web/playground.html.heex:243
 #, elixir-autogen, elixir-format
