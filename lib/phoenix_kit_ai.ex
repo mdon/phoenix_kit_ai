@@ -2685,6 +2685,61 @@ defmodule PhoenixKitAI do
     end
   end
 
+  @doc """
+  Edits or restyles images via `Completion.edit_image/4` and logs the call
+  as an `"image_edit"` request: tokens and cost when the provider reports
+  them, latency, and input/output image counts and byte sizes. The image
+  bytes themselves are never persisted in the log.
+
+  See `Completion.edit_image/4` for the accepted input shapes, the two
+  transports (xAI `/images/edits`, chat completions everywhere else) and
+  the options.
+
+      {:ok, %{images: [%{data: png, content_type: "image/png"}]}} =
+        PhoenixKitAI.edit_image(endpoint.uuid,
+          "Restyle the first photo in the style of the second.",
+          [%{data: room_jpeg, content_type: "image/jpeg"},
+           %{data: reference_jpeg, content_type: "image/jpeg"}])
+  """
+  @spec edit_image(String.t() | Endpoint.t(), String.t(), [map() | String.t()], keyword()) ::
+          {:ok, %{images: [map()], text: String.t() | nil}} | {:error, term()}
+  def edit_image(endpoint_uuid, prompt, images, opts \\ [])
+      when is_binary(prompt) and is_list(images) do
+    with {:ok, endpoint} <- resolve_endpoint(endpoint_uuid),
+         {:ok, _} <- validate_endpoint(endpoint) do
+      {auto_source, stacktrace, caller_context} = capture_caller_info()
+      source = Keyword.get(opts, :source) || auto_source
+
+      case Completion.edit_image(endpoint, prompt, images, opts) do
+        {:ok, result} ->
+          log_image_edit_request(
+            endpoint,
+            prompt,
+            images,
+            result,
+            source,
+            stacktrace,
+            caller_context
+          )
+
+          {:ok, Map.take(result, [:images, :text])}
+
+        {:error, reason} ->
+          log_failed_image_edit_request(
+            endpoint,
+            prompt,
+            images,
+            reason,
+            source,
+            stacktrace,
+            caller_context
+          )
+
+          {:error, reason}
+      end
+    end
+  end
+
   # An explicit caller value always wins; a blank/absent stored default
   # is a no-op (Completion sends no size/quality/aspect fields at all then).
   # xAI's /images/generations takes aspect_ratio/resolution, not OpenAI's
@@ -2716,6 +2771,74 @@ defmodule PhoenixKitAI do
   end
 
   defp xai_endpoint?(_), do: false
+
+  defp log_image_edit_request(endpoint, prompt, images, result, source, stacktrace, caller_ctx) do
+    capture_content = capture_request_content?()
+    usage = result[:usage] || %{}
+    outputs = result[:images] || []
+
+    base_metadata = %{
+      input_chars: String.length(prompt),
+      input_image_count: length(images),
+      input_bytes: image_input_bytes(images),
+      output_image_count: length(outputs),
+      output_bytes: Enum.reduce(outputs, 0, &(&2 + byte_size(&1[:data] || ""))),
+      source: source,
+      stacktrace: stacktrace,
+      caller_context: caller_ctx
+    }
+
+    metadata =
+      base_metadata
+      |> maybe_add_content(:input, capture_content, fn -> prompt end)
+      |> maybe_add_content(:response, capture_content, fn -> result[:text] end)
+
+    create_request(%{
+      endpoint_uuid: endpoint.uuid,
+      endpoint_name: endpoint.name,
+      model: endpoint.model,
+      request_type: "image_edit",
+      input_tokens: usage[:prompt_tokens] || 0,
+      output_tokens: usage[:completion_tokens] || 0,
+      total_tokens: usage[:total_tokens] || 0,
+      cost_cents: usage[:cost_cents],
+      latency_ms: result[:latency_ms],
+      status: "success",
+      metadata: metadata
+    })
+  end
+
+  defp log_failed_image_edit_request(endpoint, prompt, images, reason, source, stacktrace, ctx) do
+    capture_content = capture_request_content?()
+
+    base_metadata = %{
+      error_reason: inspect(reason),
+      input_chars: String.length(prompt),
+      input_image_count: length(images),
+      input_bytes: image_input_bytes(images),
+      source: source,
+      stacktrace: stacktrace,
+      caller_context: ctx
+    }
+
+    create_request(%{
+      endpoint_uuid: endpoint.uuid,
+      endpoint_name: endpoint.name,
+      model: endpoint.model,
+      request_type: "image_edit",
+      status: "error",
+      error_message: error_reason_to_string(reason),
+      metadata: maybe_add_content(base_metadata, :input, capture_content, fn -> prompt end)
+    })
+  end
+
+  # Only inline bytes count; URL inputs weigh nothing on our side.
+  defp image_input_bytes(images) do
+    Enum.reduce(images, 0, fn
+      %{data: data}, acc when is_binary(data) -> acc + byte_size(data)
+      _other, acc -> acc
+    end)
+  end
 
   defp log_image_request(endpoint, prompt, result, source, stacktrace, caller_context) do
     capture_content = capture_request_content?()

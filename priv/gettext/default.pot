@@ -58,7 +58,7 @@ msgstr ""
 msgid "API Response (raw)"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:69
+#: lib/phoenix_kit_ai/errors.ex:75
 #, elixir-autogen, elixir-format
 msgid "API error: %{status}"
 msgstr ""
@@ -105,7 +105,7 @@ msgstr ""
 msgid "All Time"
 msgstr ""
 
-#: lib/phoenix_kit_ai/components/ai_translate.ex:464
+#: lib/phoenix_kit_ai/components/ai_translate.ex:466
 #, elixir-autogen, elixir-format
 msgid "All non-primary languages (%{count}, overwrites existing)"
 msgstr ""
@@ -218,7 +218,7 @@ msgstr ""
 msgid "Connecting…"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:73
+#: lib/phoenix_kit_ai/errors.ex:79
 #, elixir-autogen, elixir-format
 msgid "Connection error: %{reason}"
 msgstr ""
@@ -228,7 +228,7 @@ msgstr ""
 msgid "Content"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:80
+#: lib/phoenix_kit_ai/errors.ex:86
 #, elixir-autogen, elixir-format
 msgid "Content must be a string"
 msgstr ""
@@ -333,7 +333,7 @@ msgstr ""
 msgid "Current Model"
 msgstr ""
 
-#: lib/phoenix_kit_ai/components/ai_translate.ex:467
+#: lib/phoenix_kit_ai/components/ai_translate.ex:469
 #, elixir-autogen, elixir-format
 msgid "Current tab only (%{lang})"
 msgstr ""
@@ -521,7 +521,7 @@ msgstr ""
 msgid "Endpoint enabled"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:54
+#: lib/phoenix_kit_ai/errors.ex:60
 #, elixir-autogen, elixir-format
 msgid "Endpoint has no model configured"
 msgstr ""
@@ -552,7 +552,7 @@ msgstr ""
 msgid "Enter your prompt template...\n\nUse {{VariableName}} for dynamic content.\n\nExample:\nTranslate the following text to {{Language}}:\n\n{{Text}}"
 msgstr ""
 
-#: lib/phoenix_kit_ai/request.ex:194
+#: lib/phoenix_kit_ai/request.ex:214
 #: lib/phoenix_kit_ai/web/playground.html.heex:271
 #, elixir-autogen, elixir-format
 msgid "Error"
@@ -649,7 +649,7 @@ msgstr ""
 msgid "Image Generation"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:53
+#: lib/phoenix_kit_ai/errors.ex:59
 #, elixir-autogen, elixir-format
 msgid "Input cannot be empty"
 msgstr ""
@@ -691,7 +691,7 @@ msgstr ""
 msgid "Invalid endpoint identifier"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:79
+#: lib/phoenix_kit_ai/errors.ex:85
 #, elixir-autogen, elixir-format
 msgid "Invalid prompt identifier"
 msgstr ""
@@ -771,7 +771,7 @@ msgstr ""
 msgid "Message"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:83
+#: lib/phoenix_kit_ai/errors.ex:89
 #, elixir-autogen, elixir-format
 msgid "Missing prompt variables: %{vars}"
 msgstr ""
@@ -876,7 +876,7 @@ msgstr ""
 msgid "No integration"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:63
+#: lib/phoenix_kit_ai/errors.ex:69
 #: lib/phoenix_kit_ai/web/endpoint_form.ex:1065
 #, elixir-autogen, elixir-format
 msgid "No integration configured for this endpoint. Set up the API key in Settings → Integrations."
@@ -1021,22 +1021,22 @@ msgstr ""
 msgid "Prompt enabled"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:87
+#: lib/phoenix_kit_ai/errors.ex:93
 #, elixir-autogen, elixir-format
 msgid "Prompt error: %{reason}"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:78
+#: lib/phoenix_kit_ai/errors.ex:84
 #, elixir-autogen, elixir-format
 msgid "Prompt has no content"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:77
+#: lib/phoenix_kit_ai/errors.ex:83
 #, elixir-autogen, elixir-format
 msgid "Prompt is disabled"
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:76
+#: lib/phoenix_kit_ai/errors.ex:82
 #: lib/phoenix_kit_ai/web/prompt_form.ex:52
 #, elixir-autogen, elixir-format
 msgid "Prompt not found"
@@ -1273,7 +1273,7 @@ msgstr ""
 msgid "Streaming Voice (xAI)"
 msgstr ""
 
-#: lib/phoenix_kit_ai/request.ex:193
+#: lib/phoenix_kit_ai/request.ex:213
 #, elixir-autogen, elixir-format
 msgid "Success"
 msgstr ""
@@ -1325,7 +1325,7 @@ msgstr ""
 msgid "The %{provider} integration is not connected — requests will fail until you connect it in Settings → Integrations."
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:50
+#: lib/phoenix_kit_ai/errors.ex:56
 #, elixir-autogen, elixir-format
 msgid "The TTS provider returned an unreadable audio response."
 msgstr ""
@@ -1335,7 +1335,7 @@ msgstr ""
 msgid "The integration is not currently connected. Open it in Settings → Integrations to test."
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:57
+#: lib/phoenix_kit_ai/errors.ex:63
 #, elixir-autogen, elixir-format
 msgid "The integration used by this endpoint has been deleted. Please select a new one in the endpoint settings."
 msgstr ""
@@ -1375,7 +1375,7 @@ msgstr ""
 msgid "Time"
 msgstr ""
 
-#: lib/phoenix_kit_ai/request.ex:195
+#: lib/phoenix_kit_ai/request.ex:215
 #, elixir-autogen, elixir-format
 msgid "Timeout"
 msgstr ""
@@ -1407,17 +1407,17 @@ msgstr ""
 msgid "Translate"
 msgstr ""
 
-#: lib/phoenix_kit_ai/components/ai_translate.ex:550
+#: lib/phoenix_kit_ai/components/ai_translate.ex:552
 #, elixir-autogen, elixir-format
 msgid "Translate %{n} missing"
 msgstr ""
 
-#: lib/phoenix_kit_ai/components/ai_translate.ex:553
+#: lib/phoenix_kit_ai/components/ai_translate.ex:555
 #, elixir-autogen, elixir-format
 msgid "Translate all %{n} languages"
 msgstr ""
 
-#: lib/phoenix_kit_ai/components/ai_translate.ex:556
+#: lib/phoenix_kit_ai/components/ai_translate.ex:558
 #, elixir-autogen, elixir-format
 msgid "Translate to %{lang}"
 msgstr ""
@@ -1482,12 +1482,12 @@ msgstr ""
 msgid "Type your message to the AI..."
 msgstr ""
 
-#: lib/phoenix_kit_ai/errors.ex:95
+#: lib/phoenix_kit_ai/errors.ex:101
 #, elixir-autogen, elixir-format
 msgid "Unexpected error: %{reason}"
 msgstr ""
 
-#: lib/phoenix_kit_ai/request.ex:196
+#: lib/phoenix_kit_ai/request.ex:216
 #, elixir-autogen, elixir-format
 msgid "Unknown"
 msgstr ""
@@ -1653,7 +1653,7 @@ msgstr ""
 msgid "remains unchanged)."
 msgstr ""
 
-#: lib/phoenix_kit_ai/components/ai_translate.ex:480
+#: lib/phoenix_kit_ai/components/ai_translate.ex:482
 #, elixir-autogen, elixir-format
 msgid "the primary language"
 msgstr ""
@@ -1713,7 +1713,7 @@ msgstr ""
 msgid "Endpoint updated successfully"
 msgstr ""
 
-#: lib/phoenix_kit_ai/components/ai_translate.ex:458
+#: lib/phoenix_kit_ai/components/ai_translate.ex:460
 #, elixir-autogen, elixir-format
 msgid "Missing only (%{count} language)"
 msgid_plural "Missing only (%{count} languages)"
@@ -1800,4 +1800,14 @@ msgstr ""
 #: lib/phoenix_kit_ai.ex:1045
 #, elixir-autogen, elixir-format
 msgid "Prompts"
+msgstr ""
+
+#: lib/phoenix_kit_ai/errors.ex:48
+#, elixir-autogen, elixir-format
+msgid "Invalid image input"
+msgstr ""
+
+#: lib/phoenix_kit_ai/errors.ex:53
+#, elixir-autogen, elixir-format
+msgid "The model returned no image"
 msgstr ""

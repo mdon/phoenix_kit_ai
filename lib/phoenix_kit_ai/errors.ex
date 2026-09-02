@@ -45,6 +45,12 @@ defmodule PhoenixKitAI.Errors do
   def message(:invalid_json_response), do: gettext("Invalid JSON response")
   def message(:no_choices_in_response), do: gettext("No choices in response")
   def message(:invalid_response_format), do: gettext("Invalid response format")
+  def message(:invalid_image_input), do: gettext("Invalid image input")
+
+  # The model answered with prose (usually a refusal) instead of an image.
+  # The prose travels in the tuple so the request log keeps the reason;
+  # the user-facing message stays generic.
+  def message({:no_image_in_response, _text}), do: gettext("The model returned no image")
 
   def message(:invalid_audio_response) do
     gettext("The TTS provider returned an unreadable audio response.")

@@ -114,6 +114,32 @@ Run `mix deps.get` and start the server. The module appears in:
 {:ok, response} = PhoenixKitAI.embed(endpoint.uuid, "Hello", dimensions: 512)
 ```
 
+### Image editing
+
+Reference images in, image out — restyling a photo, combining subjects,
+applying a look from one picture to another. Works with an OpenRouter
+endpoint on a Gemini image model (`google/gemini-2.5-flash-image`,
+`google/gemini-3-pro-image`) or an xAI endpoint on
+`grok-imagine-image-2.0`; the transport differences are handled inside.
+
+```elixir
+{:ok, %{images: [%{data: png, content_type: "image/png"}], text: note}} =
+  PhoenixKitAI.edit_image(endpoint.uuid,
+    """
+    Image 1 is the room to edit. Image 2 is the style reference.
+    Keep image 1's geometry, camera and windows; restyle the cabinetry,
+    worktop and lighting to match image 2.
+    """,
+    [%{data: room_jpeg, content_type: "image/jpeg"},
+     %{data: reference_jpeg, content_type: "image/jpeg"}],
+    image_config: %{"aspect_ratio" => "4:3"})   # chat-path passthrough
+```
+
+Put the image to be edited first and say which is which in the prompt.
+When the model answers with prose instead of an image (a refusal, most
+often) you get `{:error, {:no_image_in_response, text}}`. Every call is
+logged as an `"image_edit"` request with the provider-reported cost.
+
 ### Extracting response data
 
 ```elixir
