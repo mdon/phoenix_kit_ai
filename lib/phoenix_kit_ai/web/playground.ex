@@ -72,6 +72,16 @@ defmodule PhoenixKitAI.Web.Playground do
       |> assign(:voice_monitor_ref, nil)
       |> assign(:voice_options, @default_voice_options)
       |> assign(:voice_selected, "eve")
+      |> assign(:edit_prompt, "")
+      |> assign(:edit_result, nil)
+      |> assign(:edit_error, nil)
+      |> assign(:editing, false)
+      |> allow_upload(:edit_images,
+        accept: ~w(.jpg .jpeg .png .webp),
+        max_entries: 2,
+        max_file_size: 8_000_000,
+        auto_upload: true
+      )
 
     {:ok, socket}
   end
@@ -151,6 +161,47 @@ defmodule PhoenixKitAI.Web.Playground do
   # ===========================================
   # STREAMING VOICE (xAI REALTIME)
   # ===========================================
+
+  # ── Image edit (PhoenixKitAI.edit_image/4) ──────────────────────────
+  #
+  # Its own form: uploads need phx-change on the form that holds the file
+  # input, and HTML forbids nesting it in the main one.
+
+  @impl true
+  def handle_event("edit_change", params, socket) do
+    {:noreply,
+     assign(socket, :edit_prompt, Map.get(params, "edit_prompt", socket.assigns.edit_prompt))}
+  end
+
+  @impl true
+  def handle_event("edit_remove", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :edit_images, ref)}
+  end
+
+  @impl true
+  def handle_event("edit_send", params, socket) do
+    socket =
+      assign(socket, :edit_prompt, Map.get(params, "edit_prompt", socket.assigns.edit_prompt))
+
+    ready = Enum.filter(socket.assigns.uploads.edit_images.entries, & &1.done?)
+
+    cond do
+      is_nil(socket.assigns.selected_endpoint_uuid) ->
+        {:noreply, assign(socket, :edit_error, gettext("Please select an endpoint"))}
+
+      ready == [] ->
+        {:noreply, assign(socket, :edit_error, gettext("Please add at least one image"))}
+
+      String.trim(socket.assigns.edit_prompt) == "" ->
+        {:noreply, assign(socket, :edit_error, gettext("Please write an instruction"))}
+
+      true ->
+        send(self(), :do_edit)
+
+        {:noreply,
+         socket |> assign(:editing, true) |> assign(:edit_error, nil) |> assign(:edit_result, nil)}
+    end
+  end
 
   @impl true
   def handle_event("voice_change", params, socket) do
@@ -404,6 +455,38 @@ defmodule PhoenixKitAI.Web.Playground do
   end
 
   @impl true
+  def handle_info(:do_edit, socket) do
+    images =
+      consume_uploaded_entries(socket, :edit_images, fn %{path: path}, entry ->
+        {:ok, %{data: File.read!(path), content_type: image_type(entry)}}
+      end)
+
+    result =
+      AI.edit_image(socket.assigns.selected_endpoint_uuid, socket.assigns.edit_prompt, images,
+        source: "PhoenixKitAI.Web.Playground"
+      )
+
+    socket =
+      case result do
+        {:ok, %{images: [image | _]} = response} ->
+          assign(socket, :edit_result, %{
+            src: image_src(image),
+            text: Map.get(response, :text),
+            usage: Map.get(response, :usage),
+            latency_ms: Map.get(response, :latency_ms)
+          })
+
+        {:ok, _} ->
+          assign(socket, :edit_error, gettext("The model returned no image"))
+
+        {:error, reason} ->
+          assign(socket, :edit_error, PhoenixKitAI.Errors.message(reason))
+      end
+
+    {:noreply, assign(socket, :editing, false)}
+  end
+
+  @impl true
   def handle_info({:xai_audio_chunk, chunk}, socket) do
     Logger.debug(fn ->
       "[PhoenixKitAI.Web.Playground] xai audio chunk received: #{byte_size(chunk)} bytes"
@@ -548,4 +631,14 @@ defmodule PhoenixKitAI.Web.Playground do
       {:error, _} -> "(No content in response)"
     end
   end
+
+  defp image_type(%{client_type: type}) when is_binary(type) and type != "", do: type
+  defp image_type(_entry), do: "image/jpeg"
+
+  # Inline the bytes; providers that hand back a URL (xAI) are shown from it.
+  defp image_src(%{data: data, content_type: type}) when is_binary(data),
+    do: "data:#{type || "image/png"};base64,#{Base.encode64(data)}"
+
+  defp image_src(%{url: url}) when is_binary(url), do: url
+  defp image_src(_image), do: nil
 end

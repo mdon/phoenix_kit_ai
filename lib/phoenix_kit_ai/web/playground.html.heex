@@ -235,6 +235,92 @@
         </.form_section>
       <% end %>
 
+      <%!-- Image edit: PhoenixKitAI.edit_image/4 — one or two images + an
+           instruction, for image-capable endpoints. Separate form: uploads
+           need phx-change on the form holding the file input. --%>
+      <%= if @selected_endpoint do %>
+        <.form_section
+          title={gettext("Image edit")}
+          icon="hero-photo"
+          class="bg-base-200"
+          id="playground-image-edit"
+        >
+          <p class="text-sm text-base-content/70">
+            {gettext(
+              "Send one or two images with an instruction to an image-capable endpoint (Gemini 2.5 Flash Image, Grok Imagine). The first image is the one being edited; a second one is a reference."
+            )}
+          </p>
+          <form id="playground-image-edit-form" phx-change="edit_change" phx-submit="edit_send" class="space-y-3">
+            <.file_upload
+              upload={@uploads.edit_images}
+              standalone={false}
+              variant="button"
+              label={gettext("Add image")}
+              icon="hero-photo"
+            />
+            <div :if={@uploads.edit_images.entries != []} class="flex flex-wrap gap-3">
+              <div :for={entry <- @uploads.edit_images.entries} class="relative w-32">
+                <.live_img_preview entry={entry} class="w-32 h-24 object-cover rounded bg-base-300" />
+                <progress
+                  :if={!entry.done?}
+                  class="progress progress-primary w-full mt-1"
+                  value={entry.progress}
+                  max="100"
+                />
+                <button
+                  type="button"
+                  class="btn btn-xs btn-circle absolute -top-2 -right-2"
+                  phx-click="edit_remove"
+                  phx-value-ref={entry.ref}
+                  aria-label={gettext("Remove")}
+                >
+                  <.icon name="hero-x-mark" class="w-3 h-3" />
+                </button>
+                <p :for={err <- upload_errors(@uploads.edit_images, entry)} class="text-xs text-error mt-1">
+                  {inspect(err)}
+                </p>
+              </div>
+            </div>
+            <.textarea
+              id="playground-edit-prompt"
+              name="edit_prompt"
+              label={gettext("Instruction")}
+              value={@edit_prompt}
+              rows="3"
+              placeholder={gettext("e.g. Repaint the cabinet fronts in matte sage green; keep everything else as it is")}
+              phx-debounce="300"
+            />
+            <p :if={@edit_error} class="text-sm text-error" role="alert">{@edit_error}</p>
+            <div class="flex items-center gap-3">
+              <.button type="submit" disabled={@editing} phx-disable-with={gettext("Editing…")}>
+                <.icon name="hero-sparkles" class="w-4 h-4" />
+                {gettext("Edit image")}
+              </.button>
+              <span :if={@editing} class="loading loading-spinner loading-sm text-primary" aria-hidden="true"></span>
+              <span :if={@editing} class="text-sm text-base-content/60">{gettext("Usually 10–40 seconds…")}</span>
+            </div>
+          </form>
+
+          <div :if={@edit_result} class="space-y-2 pt-2">
+            <div class="flex flex-wrap gap-3 text-xs text-base-content/60">
+              <span :if={@edit_result.latency_ms}>
+                <.icon name="hero-clock" class="w-3 h-3 inline" /> {@edit_result.latency_ms} ms
+              </span>
+              <span :if={@edit_result.usage && @edit_result.usage[:cost_cents]}>
+                <.icon name="hero-currency-dollar" class="w-3 h-3 inline" />
+                {PhoenixKitAI.Request.format_cost(@edit_result.usage[:cost_cents])}
+              </span>
+            </div>
+            <a :if={@edit_result.src} href={@edit_result.src} target="_blank" rel="noopener" class="block max-w-xl">
+              <img src={@edit_result.src} alt={gettext("Edited image")} class="rounded-lg w-full" />
+            </a>
+            <p :if={@edit_result.text && @edit_result.text != ""} class="text-sm whitespace-pre-wrap">
+              {@edit_result.text}
+            </p>
+          </div>
+        </.form_section>
+      <% end %>
+
       <%!-- Response Area --%>
       <div id="playground-response" class="space-y-6">
         <%!-- Loading Skeleton --%>

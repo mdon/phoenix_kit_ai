@@ -62,4 +62,21 @@ defmodule PhoenixKitAI.Web.PlaygroundTest do
       assert log =~ "[PhoenixKitAI.Web.Playground] unhandled handle_info"
     end
   end
+
+  describe "image edit" do
+    test "appears once an endpoint is selected and refuses to send without an image", %{
+      conn: conn
+    } do
+      endpoint = fixture_endpoint(name: "Image Endpoint", model: "google/gemini-2.5-flash-image")
+      {:ok, view, html} = live(conn, "/en/admin/ai/playground")
+      refute html =~ "playground-image-edit"
+
+      html = render_change(view, "change", %{"endpoint_uuid" => endpoint.uuid})
+      assert html =~ "Image edit"
+      assert has_element?(view, "#playground-image-edit-form")
+
+      html = render_submit(view, "edit_send", %{"edit_prompt" => "make it green"})
+      assert html =~ "Please add at least one image"
+    end
+  end
 end
