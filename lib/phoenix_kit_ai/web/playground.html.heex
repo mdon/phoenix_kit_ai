@@ -251,13 +251,15 @@
             )}
           </p>
           <form id="playground-image-edit-form" phx-change="edit_change" phx-submit="edit_send" class="space-y-3">
-            <.file_upload
-              upload={@uploads.edit_images}
-              standalone={false}
-              variant="button"
-              label={gettext("Add image")}
-              icon="hero-photo"
-            />
+            <%!-- Not core's <.file_upload>: its "button" variant always wraps the
+                 input in its own <form> (nesting splits this form in two), and
+                 its stats hook reads "Processing on server…" for any finished
+                 entry that is not consumed yet — here entries wait for Send. --%>
+            <label class="btn btn-outline btn-sm focus-within:ring-2 focus-within:ring-primary">
+              <.icon name="hero-photo" class="w-4 h-4" />
+              {gettext("Add image")}
+              <.live_file_input upload={@uploads.edit_images} class="sr-only" />
+            </label>
             <div :if={@uploads.edit_images.entries != []} class="flex flex-wrap gap-3">
               <div :for={entry <- @uploads.edit_images.entries} class="relative w-32">
                 <.live_img_preview entry={entry} class="w-32 h-24 object-cover rounded bg-base-300" />
