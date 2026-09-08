@@ -80,6 +80,11 @@ mix test test/phoenix_kit_ai/completion_test.exs:25   # one test by line
 mix test --include destructive                        # opt-in destructive-rescue LV test
 ```
 
+Repo-local aliases:
+
+- `mix quality` — `format` + `credo --strict` + `dialyzer` (applies formatting).
+- `mix quality.ci` — `format --check-formatted` + `credo --strict` + `dialyzer`: it CHECKS formatting rather than applying it, so run `mix format` first.
+
 ## Conventions
 
 - **Module key** `"ai"` everywhere; **tab ids** prefixed `:admin_ai_`; **URL
